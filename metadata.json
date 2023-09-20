@@ -1,0 +1,38 @@
+{
+    "$schema": "https://go.kicad.org/pcm/schemas/v1",
+    "name": "Parasitics",
+    "description": "Plugin to analyze the wires in the PCB editor.",
+    "description_full": "Plugin to analyze the wires in the PCB editor.",
+    "identifier": "com.github.Steffen-W.KiCad-Parasitics",
+    "type": "plugin",
+    "author": {
+        "name": "Steffen Wittemeier",
+        "contact": {
+            "github": "https://github.com/Steffen-W"
+        }
+    },
+    "maintainer": {
+        "name": "Steffen Wittemeier",
+        "contact": {
+            "github": "https://github.com/Steffen-W"
+        }
+    },
+    "license": "GPL-3.0",
+    "resources": {
+        "homepage": "https://github.com/Steffen-W/parasitic"
+    },
+    "tags": [
+        "post_layout_simulation",
+        "inductor",
+        "resistor",
+        "capacitor",
+    ],
+    "versions": [
+        {
+            "version": "2023_09",
+            "status": "stable",
+            "kicad_version": "7.00",
+            "download_url": "https://github.com/Steffen-W/KiCad-Parasitics/"
+        }
+    ]
+}
