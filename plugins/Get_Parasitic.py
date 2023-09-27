@@ -1,5 +1,4 @@
 import numpy as np
-import ngspyce
 import os
 import math
 
@@ -16,6 +15,8 @@ def round_n(n, decimals=0):
 
 
 def RunSimulation(resistors, conn1, conn2):
+    import ngspyce
+
     # https://github.com/ignamv/ngspyce/
     filename = "TempNetlist.net"
     # with open(filename, "w") as f:
