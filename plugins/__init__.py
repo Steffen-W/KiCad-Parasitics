@@ -26,8 +26,8 @@ class ActionKiCadPlugin(pcbnew.ActionPlugin):
         self.description = "parasitic"
         self.show_toolbar_button = True
         self.plugin_path = os.path.dirname(__file__)
-        self.icon_file_name = os.path.join(self.plugin_path, "icon.png")
-        self.dark_icon_file_name = os.path.join(self.plugin_path, "icon.png")
+        self.icon_file_name = os.path.join(self.plugin_path, "icon_small.png")
+        self.dark_icon_file_name = os.path.join(self.plugin_path, "icon_small.png")
 
         # Füge das aktuelle Verzeichnis zum Modulpfad hinzu
         current_dir = os.path.dirname(os.path.abspath(__file__))

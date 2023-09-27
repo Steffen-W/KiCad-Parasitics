@@ -29,7 +29,7 @@
     ],
     "versions": [
         {
-            "version": "2023.09.26",
+            "version": "2023.09.27",
             "status": "stable",
             "kicad_version": "7.00"
         }
