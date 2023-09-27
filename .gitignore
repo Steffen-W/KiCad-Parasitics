@@ -2,3 +2,6 @@ __pycache__
 ItemList.py
 preversion
 *.zip
+.vscode
+*.net
+test*

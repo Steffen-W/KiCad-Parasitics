@@ -9,6 +9,16 @@ from pathlib import Path
 import math
 
 
+# import pip
+# def install(package):
+#     if hasattr(pip, "main"):
+#         pip.main(["install", package])
+#     else:
+#         pip._internal.main(["install", package])
+# install("PySpice")
+# import PySpice
+
+
 class ActionKiCadPlugin(pcbnew.ActionPlugin):
     def defaults(self):
         self.name = "parasitic"
@@ -102,22 +112,39 @@ class ActionKiCadPlugin(pcbnew.ActionPlugin):
                 message = "You have to mark exactly two elements."
 
             if message == "":
-                Resistance, Distance, inductance_nH = Get_Parasitic(
-                    data, CuStack, conn1, conn2, NetCode
-                )
+                (
+                    Resistance,
+                    Distance,
+                    inductance_nH,
+                    short_path_RES,
+                    Area,
+                ) = Get_Parasitic(data, CuStack, conn1, conn2, NetCode)
 
-                if not math.isinf(Resistance):
-                    message = "Resistance between both points  ≈ "
+                message += "\nShortest distance between the two points ≈ "
+                message += "{:.3f} mm".format(Distance)
+                message += "\n\nResistance (only short path) ≈ "
+                message += "{:.3f} mOhm".format(short_path_RES * 1000)
+
+                if not math.isinf(Resistance) and Resistance >= 0:
+                    message += "\nResistance between both points  ≈ "
                     message += "{:.3f} mOhm".format(Resistance * 1000)
-                    message += "\n\nShortest distance between the two points ≈ "
-                    message += "{:.3f} mm".format(Distance)
+                elif Resistance < 0:
+                    message += "\nERROR in Resistance Network calculation."
                 else:
-                    message = "No connection was found between the two marked points"
+                    message += "\nNo connection was found between the two marked points"
                 if inductance_nH > 0:
                     message += "\n\nThe determined self-inductance ≈ "
                     message += "{:.3f} nH".format(inductance_nH)
                     message += "\nHere it was assumed that the line is free without ground planes."
                     message += "\nThe result is to be taken with special caution!"
+
+                if len(Area) > 0:
+                    message += "\n\nRough area estimation of the signal"
+                    message += " (without zones and vias):"
+                    for layer in Area.keys():
+                        message += "\nLayer {}: {:.3f} mm²".format(
+                            CuStack[layer]["name"], Area[layer]
+                        )
 
             dlg = wx.MessageDialog(
                 None,
@@ -179,14 +206,21 @@ if __name__ == "__main__":
         if not NetCode == Selected[1]["NetCode"]:
             print("The marked points are not in the same network.")
 
-        Resistance, Distance, inductance_nH = Get_Parasitic(
+        Resistance, Distance, inductance_nH, short_path_RES, Area = Get_Parasitic(
             data, CuStack, conn1, conn2, NetCode
         )
         print("Distance mm", Distance)
         print("Resistance mOhm", Resistance)
+        print("Resistance (only short path) mOhm", short_path_RES)
         print("inductance_nH", inductance_nH)
+        print("Area mm2", Area)
+
+        if len(Area) > 0:
+            for layer in Area.keys():
+                txt = "Layer {}: {:.3f} mm²".format(layer, Area[layer])
+                print(txt)
     else:
         print("You have to mark exactly two elements.")
 
     # print pcb in matplotlib
-    Plot_PCB(data)
+    # Plot_PCB(data)

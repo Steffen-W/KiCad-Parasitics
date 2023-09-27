@@ -168,12 +168,14 @@ def Get_PCB_Elements(board: pcbnew.BOARD, connect: pcbnew.CONNECTIVITY_DATA):
                 getHashList(connect.GetConnectedPads(track))
                 + getHashList(connect.GetConnectedTracks(track))
             )
+            temp["Area"] = 0
         elif type(track) is pcbnew.PCB_TRACK:
             temp["type"] = "WIRE"
             temp["Start"] = ToMM(track.GetStart())
             temp["End"] = ToMM(track.GetEnd())
             temp["Width"] = ToMM(track.GetWidth())
             temp["Length"] = ToMM(track.GetLength())
+            temp["Area"] = temp["Width"] * temp["Length"]
             if track.GetLength() == 0:
                 continue
             temp["Layer"] = [track.GetLayer()]
@@ -197,6 +199,7 @@ def Get_PCB_Elements(board: pcbnew.BOARD, connect: pcbnew.CONNECTIVITY_DATA):
             temp["Orientation"] = Pad.GetOrientation().AsDegrees()
             temp["DrillSize"] = ToMM(Pad.GetDrillSize())
             temp["Drill"] = temp["DrillSize"][0]
+            temp["Area"] = ToMM(ToMM(Pad.GetEffectivePolygon().Area()))
             temp["PadName"] = Pad.GetPadName()
             # temp["FootprintUUID"] = getHash(Pad.GetParent())
             temp["FootprintReference"] = Pad.GetParent().GetReference()
@@ -207,7 +210,7 @@ def Get_PCB_Elements(board: pcbnew.BOARD, connect: pcbnew.CONNECTIVITY_DATA):
                 continue
             temp["type"] = "ZONE"
             temp["Position"] = ToMM(Pad.GetPosition())
-            temp["FilledArea"] = ToMM(ToMM(Pad.GetFilledArea()))
+            temp["Area"] = ToMM(ToMM(Pad.GetFilledArea()))
             temp["NumCorners"] = Pad.GetNumCorners()
             temp["ZoneName"] = Pad.GetZoneName()
         else:

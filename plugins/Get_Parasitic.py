@@ -70,9 +70,23 @@ def calcResVIA(Drill, Length):
     return Length * rho_cu / area * 1000
 
 
+def Get_shortest_path_RES(path, resistors):
+    def get_res(x1, x2):
+        x = next(x for x in resistors if {x1, x2} == set(x[0:2]))
+        return x[2]
+
+    RES = 0
+    for i in range(1, len(path)):
+        RES += get_res(path[i - 1], path[i])
+
+    return RES
+
+
 def Get_Parasitic(data, CuStack, conn1, conn2, netcode):
     resistors = []
     coordinates = {}
+
+    Area = {l: 0 for l in range(32)}  # for all layer
 
     for uuid, d in list(data.items()):
         if not netcode == d["NetCode"]:
@@ -101,13 +115,14 @@ def Get_Parasitic(data, CuStack, conn1, conn2, netcode):
                 )
 
         else:
+            Layer = d["Layer"][0]
+            Area[Layer] += d["Area"]
             if d["type"] == "WIRE":
-                netStart = d["netStart"][d["Layer"][0]]
-                netEnd = d["netEnd"][d["Layer"][0]]
+                netStart = d["netStart"][Layer]
+                netEnd = d["netEnd"][Layer]
                 resistor = calcResWIRE(d["Length"], d["Width"])
                 resistors.append([netStart, netEnd, resistor, d["Length"]])
 
-                Layer = d["Layer"][0]
                 coordinates[d["netStart"][Layer]] = (
                     d["Start"][0],
                     d["Start"][1],
@@ -118,6 +133,8 @@ def Get_Parasitic(data, CuStack, conn1, conn2, netcode):
                     d["End"][1],
                     CuStack[Layer]["abs_height"],
                 )
+
+    Area_reduc = {l: Area[l] for l in Area.keys() if Area[l] > 0}
 
     for res in resistors:
         if res[2] <= 0:
@@ -131,12 +148,22 @@ def Get_Parasitic(data, CuStack, conn1, conn2, netcode):
         path3d = [coordinates[p] for p in path]
     except:
         Distance, path3d = float("inf"), []
+        print("ERROR in find_shortest_path")
+
+    short_path_RES = Get_shortest_path_RES(path, resistors)
 
     inductance_nH = 0
-    if len(path3d) > 2:
-        # print(path3d)
-        vertices = interpolate_vertices(path3d, num_points=1000)
-        inductance_nH = calculate_self_inductance(vertices, current=1) * 1e9
+    try:
+        if len(path3d) > 2:
+            vertices = interpolate_vertices(path3d, num_points=1000)
+            inductance_nH = calculate_self_inductance(vertices, current=1) * 1e9
+    except:
+        inductance_nH = 0
+        print("ERROR in calculate_self_inductance")
 
-    Resistance = RunSimulation(resistors, conn1, conn2)
-    return Resistance, Distance, inductance_nH
+    try:
+        Resistance = RunSimulation(resistors, conn1, conn2)
+    except:
+        Resistance = -1
+        print("ERROR in RunSimulation")
+    return Resistance, Distance, inductance_nH, short_path_RES, Area_reduc

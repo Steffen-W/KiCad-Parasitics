@@ -29,13 +29,9 @@
     ],
     "versions": [
         {
-            "version": "2023.09.20",
+            "version": "2023.09.26",
             "status": "stable",
-            "kicad_version": "7.00",
-            "download_sha256": "76b20d1f06178aedd02e4fa70916dafadb16d207ea23db1909247267bf2649d3",
-            "download_size": 0,
-            "download_url": "https://github.com/Steffen-W/KiCad-Parasitics/",
-            "install_size": 0
+            "kicad_version": "7.00"
         }
     ]
 }
