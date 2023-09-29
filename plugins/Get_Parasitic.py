@@ -45,7 +45,10 @@ def RunSimulation(resistors, conn1, conn2):
     os.remove(filename)
     vout = ngspyce.vector(str(conn2))[0]
 
-    R = (1 - vout) / (vout / Rshunt)
+    if not vout == 0:
+        R = (1 - vout) / (vout / Rshunt)
+    else:
+        R = -1
     return R
     # return round_n(R, 6)
 
