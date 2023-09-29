@@ -117,6 +117,7 @@ class ActionKiCadPlugin(pcbnew.ActionPlugin):
                     message = "The marked points are not in the same network."
             else:
                 message = "You have to mark exactly two elements."
+                message = " Preferably pads or vias."
 
             if message == "":
                 (
@@ -129,24 +130,43 @@ class ActionKiCadPlugin(pcbnew.ActionPlugin):
 
                 message += "\nShortest distance between the two points ≈ "
                 message += "{:.3f} mm".format(Distance)
-                message += "\n\nResistance (only short path) ≈ "
-                message += "{:.3f} mOhm".format(short_path_RES * 1000)
+
+                message += "\n"
+                if short_path_RES > 0:
+                    message += "\nResistance (only short path) ≈ "
+                    message += "{:.3f} mOhm".format(short_path_RES * 1000)
+                elif short_path_RES == 0:
+                    message += "\nResistance (only short path) ≈ "
+                    message += "{:.3f} mOhm".format(short_path_RES * 1000)
+                    message += "\nSurfaces of the zones are considered perfectly "
+                    message += "conductive and short-circuit points. This is probably the case here."
+                else:
+                    message += "\nNo connection was found between the two marked points"
 
                 if not math.isinf(Resistance) and Resistance >= 0:
                     message += "\nResistance between both points  ≈ "
                     message += "{:.3f} mOhm".format(Resistance * 1000)
                 elif Resistance < 0:
                     message += "\nERROR in Resistance Network calculation."
+                    message += " Probably no ngspice installation could be found."
+                    message += " The result about the short path"
+                    message += " path is however uninfluenced."
                 else:
                     message += "\nNo connection was found between the two marked points"
+
+                message += "\n"
                 if inductance_nH > 0:
-                    message += "\n\nThe determined self-inductance ≈ "
+                    message += "\nThe determined self-inductance ≈ "
                     message += "{:.3f} nH".format(inductance_nH)
                     message += "\nHere it was assumed that the line is free without ground planes."
                     message += "\nThe result is to be taken with special caution!"
+                else:
+                    message += "\nThe determined self-inductance ≈ NAN"
+                    message += "\nFor direct and uninterrupted connections the calculation is not applicable."
 
+                message += "\n"
                 if len(Area) > 0:
-                    message += "\n\nRough area estimation of the signal"
+                    message += "\nRough area estimation of the signal"
                     message += " (without zones and vias):"
                     for layer in Area.keys():
                         message += "\nLayer {}: {:.3f} mm²".format(
