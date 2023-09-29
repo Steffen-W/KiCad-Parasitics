@@ -147,11 +147,11 @@ def Get_Parasitic(data, CuStack, conn1, conn2, netcode):
     try:
         Distance, path = find_shortest_path(graph, conn1, conn2)
         path3d = [coordinates[p] for p in path]
+        short_path_RES = Get_shortest_path_RES(path, resistors)
     except:
+        short_path_RES = -1
         Distance, path3d = float("inf"), []
         print("ERROR in find_shortest_path")
-
-    short_path_RES = Get_shortest_path_RES(path, resistors)
 
     inductance_nH = 0
     try:
