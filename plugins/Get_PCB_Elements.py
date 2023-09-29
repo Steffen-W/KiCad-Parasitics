@@ -180,6 +180,9 @@ def Get_PCB_Elements(board: pcbnew.BOARD, connect: pcbnew.CONNECTIVITY_DATA):
                 continue
             temp["Layer"] = [track.GetLayer()]
             temp["connStart"], temp["connEnd"] = getConnections(track, connect)
+        else:
+            print("type", type(track), "is not considered!")
+            continue
 
         temp["Netname"] = track.GetNetname()
         temp["NetCode"] = track.GetNetCode()

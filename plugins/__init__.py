@@ -117,7 +117,7 @@ class ActionKiCadPlugin(pcbnew.ActionPlugin):
                     message = "The marked points are not in the same network."
             else:
                 message = "You have to mark exactly two elements."
-                message = " Preferably pads or vias."
+                message += " Preferably pads or vias."
 
             if message == "":
                 (
