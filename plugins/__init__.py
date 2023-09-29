@@ -18,6 +18,8 @@ import math
 # install("PySpice")
 # import PySpice
 
+debug = 0
+
 
 class ActionKiCadPlugin(pcbnew.ActionPlugin):
     def defaults(self):
@@ -55,7 +57,8 @@ class ActionKiCadPlugin(pcbnew.ActionPlugin):
             # Get PCB Elements
             ####################################################
 
-            reload(Get_PCB_Elements)
+            if debug:
+                reload(Get_PCB_Elements)
             from Get_PCB_Elements import Get_PCB_Elements, SaveDictToFile
 
             ItemList = Get_PCB_Elements(board, connect)
@@ -64,19 +67,21 @@ class ActionKiCadPlugin(pcbnew.ActionPlugin):
             # save Variable ItemList to file (for debug)
             ####################################################
 
-            save_as_file = os.path.join(self.plugin_path, "ItemList.py")
-            print("save_as_file", save_as_file)
-            SaveDictToFile(ItemList, save_as_file)
-            with open(save_as_file, "a") as f:
-                f.write('\nboard_FileName = "')
-                f.write(str(board_FileName))
-                f.write('"')
+            if debug:
+                save_as_file = os.path.join(self.plugin_path, "ItemList.py")
+                print("save_as_file", save_as_file)
+                SaveDictToFile(ItemList, save_as_file)
+                with open(save_as_file, "a") as f:
+                    f.write('\nboard_FileName = "')
+                    f.write(str(board_FileName))
+                    f.write('"')
 
             ####################################################
             # connect nets together
             ####################################################
 
-            reload(Connect_Nets)
+            if debug:
+                reload(Connect_Nets)
             from Connect_Nets import Connect_Nets
 
             data = Connect_Nets(ItemList)
@@ -86,7 +91,8 @@ class ActionKiCadPlugin(pcbnew.ActionPlugin):
             # read PhysicalLayerStack from file
             ####################################################
 
-            reload(Get_PCB_Stackup)
+            if debug:
+                reload(Get_PCB_Stackup)
             from Get_PCB_Stackup import Get_PCB_Stackup
 
             PhysicalLayerStack, CuStack = Get_PCB_Stackup(ProjectPath=board_FileName)
@@ -96,7 +102,8 @@ class ActionKiCadPlugin(pcbnew.ActionPlugin):
             # get resistance
             ####################################################
 
-            reload(Get_Parasitic)
+            if debug:
+                reload(Get_Parasitic)
             from Get_Parasitic import Get_Parasitic
 
             Selected = [d for uuid, d in list(data.items()) if d["IsSelected"]]
@@ -159,8 +166,9 @@ class ActionKiCadPlugin(pcbnew.ActionPlugin):
             # print pcb in matplotlib
             ####################################################
 
-            # from Plot_PCB import Plot_PCB
-            # Plot_PCB(data)
+            # if debug:
+            #     from Plot_PCB import Plot_PCB
+            #     Plot_PCB(data)
 
         except Exception as e:
             dlg = wx.MessageDialog(
