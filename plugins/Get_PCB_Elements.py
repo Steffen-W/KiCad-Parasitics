@@ -180,6 +180,18 @@ def Get_PCB_Elements(board: pcbnew.BOARD, connect: pcbnew.CONNECTIVITY_DATA):
                 continue
             temp["Layer"] = [track.GetLayer()]
             temp["connStart"], temp["connEnd"] = getConnections(track, connect)
+        elif type(track) is pcbnew.PCB_ARC:
+            temp["type"] = "WIRE"
+            temp["Start"] = ToMM(track.GetStart())
+            temp["End"] = ToMM(track.GetEnd())
+            temp["Radius"] = ToMM(track.GetRadius())
+            temp["Width"] = ToMM(track.GetWidth())
+            temp["Length"] = ToMM(track.GetLength())
+            temp["Area"] = temp["Width"] * temp["Length"]
+            if track.GetLength() == 0:
+                continue
+            temp["Layer"] = [track.GetLayer()]
+            temp["connStart"], temp["connEnd"] = getConnections(track, connect)
         else:
             print("type", type(track), "is not considered!")
             continue
@@ -205,7 +217,8 @@ def Get_PCB_Elements(board: pcbnew.BOARD, connect: pcbnew.CONNECTIVITY_DATA):
             temp["Area"] = ToMM(ToMM(Pad.GetEffectivePolygon().Area()))
             temp["PadName"] = Pad.GetPadName()
             # temp["FootprintUUID"] = getHash(Pad.GetParent())
-            temp["FootprintReference"] = Pad.GetParent().GetReference()
+            # if Pad.GetParent():
+            #     temp["FootprintReference"] = Pad.GetParent().GetReference()
 
         elif type(Pad) is pcbnew.ZONE:
             # pcbnew.ZONE().GetZoneName
@@ -217,6 +230,7 @@ def Get_PCB_Elements(board: pcbnew.BOARD, connect: pcbnew.CONNECTIVITY_DATA):
             temp["NumCorners"] = Pad.GetNumCorners()
             temp["ZoneName"] = Pad.GetZoneName()
         else:
+            print("type", type(track), "is not considered!")
             continue
 
         temp["Netname"] = Pad.GetNetname()
