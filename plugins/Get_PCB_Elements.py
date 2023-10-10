@@ -230,7 +230,8 @@ def Get_PCB_Elements(board: pcbnew.BOARD, connect: pcbnew.CONNECTIVITY_DATA):
             temp["NumCorners"] = Pad.GetNumCorners()
             temp["ZoneName"] = Pad.GetZoneName()
         else:
-            print("type", type(track), "is not considered!")
+            if not type(track) == pcbnew.PCB_TRACK:
+                print("type", type(track), "is not considered!")
             continue
 
         temp["Netname"] = Pad.GetNetname()
