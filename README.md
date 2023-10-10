@@ -29,4 +29,5 @@ Operating systems
 
 KiCad versions
 - [ ] KiCad 6 (will also not work in the future)
-- [x] KiCad 7.0.8
+- [x] KiCad 7.0.8 (up to commit [cd378574](https://gitlab.com/kicad/code/kicad/-/commit/cd3785744c3f6654cb151ac6edae8142dd62173a))
+- [x] KiCad 7.99.0-unknow (up to commit [099e5dd9](https://gitlab.com/kicad/code/kicad/-/commit/099e5dd9e7baec59cd68b9da01a6b35cdc972eb5))
