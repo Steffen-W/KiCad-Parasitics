@@ -132,6 +132,8 @@ class ActionKiCadPlugin(pcbnew.ActionPlugin):
                 message += "{:.3f} mm".format(Distance)
 
                 message += "\n"
+                if not PhysicalLayerStack:
+                    message += "\nNo Physical Stackup could be found!"
                 if short_path_RES > 0:
                     message += "\nResistance (only short path) ≈ "
                     message += "{:.3f} mOhm".format(short_path_RES * 1000)

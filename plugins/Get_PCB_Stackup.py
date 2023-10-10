@@ -15,13 +15,16 @@ def extract_layer_from_string(input_string):
     return None
 
 
-def search_recursive(line: list, entry: str):
+def search_recursive(line: list, entry: str, all=False):
     if type(line[0]) == str and line[0] == entry:
-        return line[1]
+        if all:
+            return line
+        else:
+            return line[1]
 
     for e in line:
         if type(e) == list:
-            res = search_recursive(e, entry)
+            res = search_recursive(line=e, entry=entry, all=all)
             if not res == None:
                 return res
     return None
@@ -41,22 +44,31 @@ def Get_PCB_Stackup(ProjectPath="./test.kicad_pcb"):
     if exists(ProjectPath):
         txt = readFile2var(ProjectPath)
         parsed = s_expression_parse.parse_sexp(txt)
-        for line in parsed:
-            if line[0].lower() == "setup":
-                abs_height = 0.0
-                for layer in line[1]:
-                    tmp = {}
-                    tmp["layer"] = search_recursive(layer, "layer")
-                    tmp["thickness"] = search_recursive(layer, "thickness")
-                    tmp["epsilon_r"] = search_recursive(layer, "epsilon_r")
-                    tmp["type"] = search_recursive(layer, "type")
 
-                    if not tmp["thickness"] == None:
-                        tmp["cu_layer"] = extract_layer_from_string(tmp["layer"])
-                        tmp["abs_height"] = abs_height
-                        abs_height += float(tmp["thickness"])
-                        PhysicalLayerStack.append(tmp)
+        while True:
+            setup = search_recursive(parsed, "setup", all=True)
+            if not setup:
                 break
+
+            stackup = search_recursive(setup, "stackup", all=True)
+            if not stackup:
+                break
+
+            abs_height = 0.0
+            for layer in stackup:
+                tmp = {}
+                tmp["layer"] = search_recursive(layer, "layer")
+                tmp["thickness"] = search_recursive(layer, "thickness")
+                tmp["epsilon_r"] = search_recursive(layer, "epsilon_r")
+                tmp["type"] = search_recursive(layer, "type")
+
+                if not tmp["thickness"] == None:
+                    tmp["cu_layer"] = extract_layer_from_string(tmp["layer"])
+                    tmp["abs_height"] = abs_height
+                    abs_height += float(tmp["thickness"])
+                    PhysicalLayerStack.append(tmp)
+            break
+
         for Layer in PhysicalLayerStack:
             if not Layer["cu_layer"] == None:
                 CuStack[Layer["cu_layer"]] = {
@@ -66,5 +78,16 @@ def Get_PCB_Stackup(ProjectPath="./test.kicad_pcb"):
                 }
                 if Layer["thickness"] <= 0:
                     raise Exception("Problematic layer thickness detected")
+
+    if not CuStack:
+        layers = search_recursive(parsed, "layers", all=True)
+        for layer in layers:
+            if type(layer) == list and "signal" in layer:
+                CuStack[layer[0]] = {
+                    "thickness": 0.035,
+                    "name": layer[1],
+                    "abs_height": float(layer[0]) / 20,  # arbitrary assumption
+                }
+        print("estimated CuStack", CuStack)
 
     return PhysicalLayerStack, CuStack
