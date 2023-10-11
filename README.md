@@ -11,12 +11,12 @@ First install Kicad-Parasitic from the Kicad "Plugin and Content Manager", then:
 - go to File -> Open Demo Project ...
 - select Stickhub folder
 - select StickHub.kicad_pro
-![grafik](https://github.com/nopeppermint/KiCad-Parasitics/assets/3403218/4780a4f3-2c2f-4d14-8325-577f7d687760)
+![grafik](https://user-images.githubusercontent.com/3403218/274055069-4780a4f3-2c2f-4d14-8325-577f7d687760.png)
 - open StickHub.kicad_pcb
 - zoom in to the front layer, close to the USB connector
 - select the two D- vias
 - press on the "parasitic" icon
-- ![grafik](https://github.com/nopeppermint/KiCad-Parasitics/assets/3403218/e2c870e7-c23e-4c59-855d-cbc0a39c98f6)
+- ![grafik](https://user-images.githubusercontent.com/3403218/274056663-e2c870e7-c23e-4c59-855d-cbc0a39c98f6.png)
 
 
 
