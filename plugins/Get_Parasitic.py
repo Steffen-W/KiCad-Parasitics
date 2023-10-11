@@ -53,11 +53,13 @@ def RunSimulation(resistors, conn1, conn2):
     # return round_n(R, 6)
 
 
+# in https://www.youtube.com/watch?v=hNHTwpegFBw
+# rho_cu = 1/47e6  # Ohm * m # 26% more than 1.68e-8
+
 rho_cu = 1.68e-8  # Ohm * m
-cu_thickness = 0.035  # mm
 
 
-def calcResWIRE(Length, Width, freq=0):
+def calcResWIRE(Length, Width, cu_thickness=0.035, freq=0):
     # https://learnemc.com/EXT/calculators/Resistance_Calculator/rect.html
 
     if freq == 0:
@@ -68,7 +70,7 @@ def calcResWIRE(Length, Width, freq=0):
         return Length * rho_cu / (cu_thickness * Width) * 1000.0
 
 
-def calcResVIA(Drill, Length):
+def calcResVIA(Drill, Length, cu_thickness=0.035):
     radius = Drill / 2
     area = np.pi * ((radius + cu_thickness) ** 2 - radius**2)
     return Length * rho_cu / area * 1000
@@ -100,10 +102,11 @@ def Get_Parasitic(data, CuStack, conn1, conn2, netcode):
             for i in range(1, len(d["Layer"])):
                 Layer1 = d["Layer"][i - 1]
                 Layer2 = d["Layer"][i]
+                thickness = CuStack[0]["thickness"]  # from Layer Top
                 distance = CuStack[Layer2]["abs_height"] - CuStack[Layer1]["abs_height"]
                 if "Drill" not in d:
                     continue
-                resistor = calcResVIA(d["Drill"], distance)
+                resistor = calcResVIA(d["Drill"], distance, cu_thickness=thickness)
                 resistors.append(
                     [d["netStart"][Layer1], d["netStart"][Layer2], resistor, distance]
                 )
@@ -124,7 +127,8 @@ def Get_Parasitic(data, CuStack, conn1, conn2, netcode):
             if d["type"] == "WIRE":
                 netStart = d["netStart"][Layer]
                 netEnd = d["netEnd"][Layer]
-                resistor = calcResWIRE(d["Length"], d["Width"])
+                thickness = CuStack[Layer]["thickness"]
+                resistor = calcResWIRE(d["Length"], d["Width"], cu_thickness=thickness)
                 resistors.append([netStart, netEnd, resistor, d["Length"]])
 
                 coordinates[d["netStart"][Layer]] = (

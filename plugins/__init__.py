@@ -171,8 +171,10 @@ class ActionKiCadPlugin(pcbnew.ActionPlugin):
                     message += "\nRough area estimation of the signal"
                     message += " (without zones and vias):"
                     for layer in Area.keys():
-                        message += "\nLayer {}: {:.3f} mm²".format(
-                            CuStack[layer]["name"], Area[layer]
+                        message += "\nLayer {}: {:.3f} mm², {} μm copper".format(
+                            CuStack[layer]["name"],
+                            Area[layer],
+                            CuStack[layer]["thickness"] * 1000,
                         )
 
             dlg = wx.MessageDialog(
