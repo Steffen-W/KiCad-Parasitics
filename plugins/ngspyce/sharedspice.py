@@ -33,7 +33,8 @@ if os.name == 'nt':  # Windows
     if 'SPICE_LIB_DIR' not in os.environ:
         os.environ['SPICE_LIB_DIR'] = os.path.join(spice_path, 'share',
                                                    'ngspice')
-    if os.path.exists("ngspice.dll"):
+    
+    if os.path.exists(os.path.join(os.path.dirname(__file__), "ngspice.dll")):
         spice = CDLL('ngspice')
     else:
         os.chdir(os.path.join(spice_path, 'bin_dll'))
