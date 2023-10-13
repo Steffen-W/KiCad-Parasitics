@@ -1,6 +1,7 @@
 import numpy as np
 import os
 import math
+import traceback
 
 from Get_Self_Inductance import calculate_self_inductance, interpolate_vertices
 
@@ -18,24 +19,16 @@ def RunSimulation(resistors, conn1, conn2):
     import ngspyce
 
     # https://github.com/ignamv/ngspyce/
-    filename = "TempNetlist.net"
-    # with open(filename, "w") as f:
-    #     f.write("* gnetlist -g spice-sdb\n")
-    #     f.write("R1 1 Vout 1k\n")
-    #     f.write("R2 0 Vout 1k\n")
-    #     f.write("v1 1 0 1\n")
-    #     f.write(".end")
+    filename = os.path.join(os.path.dirname(__file__), "TempNetlist.net")
 
     Rshunt = 0.1
-
     with open(filename, "w") as f:
         f.write("* gnetlist -g spice-sdb\n")
 
         for i, res in enumerate(resistors):
             entry = "R{} {} {} {:.10f}\n".format(i + 1, res[0], res[1], res[2])
             f.write(entry)
-        # f.write("R1 1 Vout 1k\n")
-        # f.write("R2 0 Vout 1k\n")
+
         f.write("v1 {} 0 1\n".format(conn1))
         f.write("R{} 0 {} {}\n".format(i + 2, conn2, Rshunt))
         f.write(".end")
@@ -50,7 +43,6 @@ def RunSimulation(resistors, conn1, conn2):
     else:
         R = -1
     return R
-    # return round_n(R, 6)
 
 
 # in https://www.youtube.com/watch?v=hNHTwpegFBw
@@ -155,9 +147,10 @@ def Get_Parasitic(data, CuStack, conn1, conn2, netcode):
         Distance, path = find_shortest_path(graph, conn1, conn2)
         path3d = [coordinates[p] for p in path]
         short_path_RES = Get_shortest_path_RES(path, resistors)
-    except:
+    except Exception as e:
         short_path_RES = -1
         Distance, path3d = float("inf"), []
+        print(traceback.format_exc())
         print("ERROR in find_shortest_path")
 
     inductance_nH = 0
@@ -165,13 +158,15 @@ def Get_Parasitic(data, CuStack, conn1, conn2, netcode):
         if len(path3d) > 2:
             vertices = interpolate_vertices(path3d, num_points=1000)
             inductance_nH = calculate_self_inductance(vertices, current=1) * 1e9
-    except:
+    except Exception as e:
         inductance_nH = 0
+        print(traceback.format_exc())
         print("ERROR in calculate_self_inductance")
 
     try:
         Resistance = RunSimulation(resistors, conn1, conn2)
-    except:
+    except Exception as e:
         Resistance = -1
+        print(traceback.format_exc())
         print("ERROR in RunSimulation")
     return Resistance, Distance, inductance_nH, short_path_RES, Area_reduc
