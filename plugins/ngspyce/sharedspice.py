@@ -34,9 +34,9 @@ if os.name == 'nt':  # Windows
         os.environ['SPICE_LIB_DIR'] = os.path.join(spice_path, 'share',
                                                    'ngspice')
     
-    if os.path.exists(os.path.join(os.path.dirname(__file__), "ngspice.dll")):
+    try:
         spice = CDLL('ngspice')
-    else:
+    except:
         os.chdir(os.path.join(spice_path, 'bin_dll'))
         spice = CDLL('ngspice')
         os.chdir(curr_dir_before)
