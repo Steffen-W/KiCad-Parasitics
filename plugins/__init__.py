@@ -1,27 +1,33 @@
 import pcbnew
-from importlib import reload
-import sys
-import os
+import os.path
 import wx
 import traceback
-from pprint import pprint
 from pathlib import Path
 import math
 
-
-# import pip
-# def install(package):
-#     if hasattr(pip, "main"):
-#         pip.main(["install", package])
-#     else:
-#         pip._internal.main(["install", package])
-# install("PySpice")
-# import PySpice
-
 debug = 0
 
+if debug:
+    from pprint import pprint
+    from importlib import reload
 
-class ActionKiCadPlugin(pcbnew.ActionPlugin):
+try:
+    if __name__ == "__main__":
+        from ItemList import data, board_FileName  # instead: import Get_PCB_Elements
+        from Connect_Nets import Connect_Nets
+        from Get_PCB_Stackup import Get_PCB_Stackup
+        from Get_Parasitic import Get_Parasitic
+        from Plot_PCB import Plot_PCB
+    else:
+        from .Get_PCB_Elements import Get_PCB_Elements, SaveDictToFile
+        from .Connect_Nets import Connect_Nets
+        from .Get_PCB_Stackup import Get_PCB_Stackup
+        from .Get_Parasitic import Get_Parasitic
+except Exception as e:
+    print(traceback.format_exc())
+
+
+class KiCadPluginParasitic(pcbnew.ActionPlugin):
     def defaults(self):
         self.name = "parasitic"
         self.category = "parasitic"
@@ -31,18 +37,15 @@ class ActionKiCadPlugin(pcbnew.ActionPlugin):
         self.icon_file_name = os.path.join(self.plugin_path, "icon_small.png")
         self.dark_icon_file_name = os.path.join(self.plugin_path, "icon_small.png")
 
-        # Füge das aktuelle Verzeichnis zum Modulpfad hinzu
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        sys.path.append(current_dir)
-
     def Run(self):
         try:
             print("###############################################################")
 
-            import Get_PCB_Elements
-            import Connect_Nets
-            import Get_PCB_Stackup
-            import Get_Parasitic
+            if debug:
+                reload(Get_PCB_Elements)
+                reload(Connect_Nets)
+                reload(Get_PCB_Stackup)
+                reload(Get_Parasitic)
 
             board = pcbnew.GetBoard()
             connect = board.GetConnectivity()
@@ -56,10 +59,6 @@ class ActionKiCadPlugin(pcbnew.ActionPlugin):
             ####################################################
             # Get PCB Elements
             ####################################################
-
-            if debug:
-                reload(Get_PCB_Elements)
-            from Get_PCB_Elements import Get_PCB_Elements, SaveDictToFile
 
             ItemList = Get_PCB_Elements(board, connect)
 
@@ -80,31 +79,21 @@ class ActionKiCadPlugin(pcbnew.ActionPlugin):
             # connect nets together
             ####################################################
 
-            if debug:
-                reload(Connect_Nets)
-            from Connect_Nets import Connect_Nets
-
             data = Connect_Nets(ItemList)
-            # pprint(data)
+            if debug:
+                pprint(data)
 
             ####################################################
             # read PhysicalLayerStack from file
             ####################################################
 
-            if debug:
-                reload(Get_PCB_Stackup)
-            from Get_PCB_Stackup import Get_PCB_Stackup
-
             PhysicalLayerStack, CuStack = Get_PCB_Stackup(ProjectPath=board_FileName)
-            # pprint(CuStack)
+            if debug:
+                pprint(CuStack)
 
             ####################################################
             # get resistance
             ####################################################
-
-            if debug:
-                reload(Get_Parasitic)
-            from Get_Parasitic import Get_Parasitic
 
             Selected = [d for uuid, d in list(data.items()) if d["IsSelected"]]
 
@@ -204,20 +193,12 @@ class ActionKiCadPlugin(pcbnew.ActionPlugin):
             dlg.ShowModal()
             dlg.Destroy()
 
-        pcbnew.Refresh()
-
 
 if not __name__ == "__main__":
-    ActionKiCadPlugin().register()
+    KiCadPluginParasitic().register()
 
 
 if __name__ == "__main__":
-    from ItemList import data, board_FileName  # instead: import Get_PCB_Elements
-    from Connect_Nets import Connect_Nets
-    from Get_PCB_Stackup import Get_PCB_Stackup
-    from Get_Parasitic import Get_Parasitic
-    from Plot_PCB import Plot_PCB
-
     # Get PCB Elements
     ItemList = data
 

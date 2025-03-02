@@ -3,9 +3,18 @@ import os
 import math
 import traceback
 
-from Get_Self_Inductance import calculate_self_inductance, interpolate_vertices
 
-from Get_Distance import find_shortest_path, get_graph_from_edges
+try:
+    if __name__ == "__main__":
+        from Get_Self_Inductance import calculate_self_inductance, interpolate_vertices
+        from Get_Distance import find_shortest_path, get_graph_from_edges
+        import ngspyce
+    else:
+        from .Get_Self_Inductance import calculate_self_inductance, interpolate_vertices
+        from .Get_Distance import find_shortest_path, get_graph_from_edges
+        from . import ngspyce
+except Exception as e:
+    print(traceback.format_exc())
 
 
 def round_n(n, decimals=0):
@@ -16,8 +25,6 @@ def round_n(n, decimals=0):
 
 
 def RunSimulation(resistors, conn1, conn2):
-    import ngspyce
-
     # https://github.com/ignamv/ngspyce/
     filename = os.path.join(os.path.dirname(__file__), "TempNetlist.net")
 

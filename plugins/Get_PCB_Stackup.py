@@ -1,5 +1,5 @@
 from os.path import exists
-import s_expression_parse
+from .s_expression_parse import parse_sexp
 import re
 
 
@@ -43,7 +43,7 @@ def Get_PCB_Stackup(ProjectPath="./test.kicad_pcb"):
     CuStack = {}
     if exists(ProjectPath):
         txt = readFile2var(ProjectPath)
-        parsed = s_expression_parse.parse_sexp(txt)
+        parsed = parse_sexp(txt)
 
         while True:
             setup = search_recursive(parsed, "setup", all=True)
