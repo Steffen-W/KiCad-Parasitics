@@ -4,12 +4,14 @@ import wx
 import traceback
 from pathlib import Path
 import math
+import sys
 
 debug = 0
 
 if debug:
     from pprint import pprint
     from importlib import reload
+    package_name = "com_github_Steffen-W_KiCad-Parasitics"
 
 try:
     if __name__ == "__main__":
@@ -39,13 +41,22 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
 
     def Run(self):
         try:
-            print("###############################################################")
 
             if debug:
-                reload(Get_PCB_Elements)
-                reload(Connect_Nets)
-                reload(Get_PCB_Stackup)
-                reload(Get_Parasitic)
+                print("###############################################################")
+                from . import Get_PCB_Elements
+                from . import Connect_Nets
+                from . import Get_PCB_Stackup
+                from . import Get_Parasitic
+
+                reload(sys.modules[f"{package_name}.Get_PCB_Elements"])
+                reload(sys.modules[f"{package_name}.Connect_Nets"])
+                reload(sys.modules[f"{package_name}.Get_PCB_Stackup"])
+                reload(sys.modules[f"{package_name}.Get_Parasitic"])
+                from .Get_PCB_Elements import Get_PCB_Elements, SaveDictToFile
+                from .Connect_Nets import Connect_Nets
+                from .Get_PCB_Stackup import Get_PCB_Stackup
+                from .Get_Parasitic import Get_Parasitic
 
             board = pcbnew.GetBoard()
             connect = board.GetConnectivity()
