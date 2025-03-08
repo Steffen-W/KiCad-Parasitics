@@ -4,26 +4,12 @@ import wx
 import traceback
 from pathlib import Path
 import math
-import sys
-
-debug = 0
-
-if debug:
-    from pprint import pprint
-    from importlib import reload
-    package_name = "com_github_Steffen-W_KiCad-Parasitics"
 
 try:
-    if __name__ == "__main__":
-        from ItemList import data, board_FileName  # instead: import Get_PCB_Elements
-        from Connect_Nets import Connect_Nets
-        from Get_PCB_Stackup import Get_PCB_Stackup
-        from Get_Parasitic import Get_Parasitic
-        from Plot_PCB import Plot_PCB
-    else:
+    if not __name__ == "__main__":
         from .Get_PCB_Elements import Get_PCB_Elements, SaveDictToFile
         from .Connect_Nets import Connect_Nets
-        from .Get_PCB_Stackup import Get_PCB_Stackup
+        from .Get_PCB_Stackup import Get_PCB_Stackup_fun
         from .Get_Parasitic import Get_Parasitic
 except Exception as e:
     print(traceback.format_exc())
@@ -41,22 +27,7 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
 
     def Run(self):
         try:
-
-            if debug:
-                print("###############################################################")
-                from . import Get_PCB_Elements
-                from . import Connect_Nets
-                from . import Get_PCB_Stackup
-                from . import Get_Parasitic
-
-                reload(sys.modules[f"{package_name}.Get_PCB_Elements"])
-                reload(sys.modules[f"{package_name}.Connect_Nets"])
-                reload(sys.modules[f"{package_name}.Get_PCB_Stackup"])
-                reload(sys.modules[f"{package_name}.Get_Parasitic"])
-                from .Get_PCB_Elements import Get_PCB_Elements, SaveDictToFile
-                from .Connect_Nets import Connect_Nets
-                from .Get_PCB_Stackup import Get_PCB_Stackup
-                from .Get_Parasitic import Get_Parasitic
+            debug = 0
 
             board = pcbnew.GetBoard()
             connect = board.GetConnectivity()
@@ -98,7 +69,9 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
             # read PhysicalLayerStack from file
             ####################################################
 
-            PhysicalLayerStack, CuStack = Get_PCB_Stackup(ProjectPath=board_FileName)
+            PhysicalLayerStack, CuStack = Get_PCB_Stackup_fun(
+                ProjectPath=board_FileName
+            )
             if debug:
                 pprint(CuStack)
 
@@ -106,7 +79,7 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
             # get resistance
             ####################################################
 
-            Selected = [d for uuid, d in list(data.items()) if d["IsSelected"]]
+            Selected = [d for uuid, d in data.items() if d["IsSelected"]]
 
             message = ""
             if len(Selected) == 2:
@@ -210,6 +183,13 @@ if not __name__ == "__main__":
 
 
 if __name__ == "__main__":
+    from ItemList import data, board_FileName  # instead: import Get_PCB_Elements
+    from Connect_Nets import Connect_Nets
+    from Get_PCB_Stackup import Get_PCB_Stackup_fun
+    from Get_Parasitic import Get_Parasitic
+    from Plot_PCB import Plot_PCB
+    from pprint import pprint
+
     # Get PCB Elements
     ItemList = data
 
@@ -218,7 +198,7 @@ if __name__ == "__main__":
     # pprint(data)
 
     # read PhysicalLayerStack from file
-    PhysicalLayerStack, CuStack = Get_PCB_Stackup(ProjectPath=board_FileName)
+    PhysicalLayerStack, CuStack = Get_PCB_Stackup_fun(ProjectPath=board_FileName)
     pprint(CuStack)
 
     # get resistance
@@ -233,11 +213,11 @@ if __name__ == "__main__":
         Resistance, Distance, inductance_nH, short_path_RES, Area = Get_Parasitic(
             data, CuStack, conn1, conn2, NetCode
         )
-        print("Distance mm", Distance)
-        print("Resistance mOhm", Resistance)
-        print("Resistance (only short path) mOhm", short_path_RES)
-        print("inductance_nH", inductance_nH)
-        print("Area mm2", Area)
+        print(f"Distance {Distance} mm")
+        print(f"Resistance {Resistance} mOhm")
+        print(f"Resistance {short_path_RES} mOhm (only short path)")
+        print(f"inductance {inductance_nH} nH")
+        # print(f"Area {Area} mm2")
 
         if len(Area) > 0:
             for layer in Area.keys():
