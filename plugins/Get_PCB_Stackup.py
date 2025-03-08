@@ -1,5 +1,10 @@
 from os.path import exists
-from .s_expression_parse import parse_sexp
+
+try:
+    from .s_expression_parse import parse_sexp
+except:
+    from s_expression_parse import parse_sexp
+
 import re
 
 
@@ -30,7 +35,7 @@ def search_recursive(line: list, entry: str, all=False):
     return None
 
 
-def Get_PCB_Stackup(ProjectPath="./test.kicad_pcb"):
+def Get_PCB_Stackup_fun(ProjectPath="./test.kicad_pcb"):
     def readFile2var(path):
         if not exists(path):
             return None
@@ -41,43 +46,46 @@ def Get_PCB_Stackup(ProjectPath="./test.kicad_pcb"):
 
     PhysicalLayerStack = []
     CuStack = {}
-    if exists(ProjectPath):
-        txt = readFile2var(ProjectPath)
-        parsed = parse_sexp(txt)
+    try:
+        if exists(ProjectPath):
+            txt = readFile2var(ProjectPath)
+            parsed = parse_sexp(txt)
 
-        while True:
-            setup = search_recursive(parsed, "setup", all=True)
-            if not setup:
+            while True:
+                setup = search_recursive(parsed, "setup", all=True)
+                if not setup:
+                    break
+
+                stackup = search_recursive(setup, "stackup", all=True)
+                if not stackup:
+                    break
+
+                abs_height = 0.0
+                for layer in stackup:
+                    tmp = {}
+                    tmp["layer"] = search_recursive(layer, "layer")
+                    tmp["thickness"] = search_recursive(layer, "thickness")
+                    tmp["epsilon_r"] = search_recursive(layer, "epsilon_r")
+                    tmp["type"] = search_recursive(layer, "type")
+
+                    if not tmp["thickness"] == None:
+                        tmp["cu_layer"] = extract_layer_from_string(tmp["layer"])
+                        tmp["abs_height"] = abs_height
+                        abs_height += float(tmp["thickness"])
+                        PhysicalLayerStack.append(tmp)
                 break
 
-            stackup = search_recursive(setup, "stackup", all=True)
-            if not stackup:
-                break
-
-            abs_height = 0.0
-            for layer in stackup:
-                tmp = {}
-                tmp["layer"] = search_recursive(layer, "layer")
-                tmp["thickness"] = search_recursive(layer, "thickness")
-                tmp["epsilon_r"] = search_recursive(layer, "epsilon_r")
-                tmp["type"] = search_recursive(layer, "type")
-
-                if not tmp["thickness"] == None:
-                    tmp["cu_layer"] = extract_layer_from_string(tmp["layer"])
-                    tmp["abs_height"] = abs_height
-                    abs_height += float(tmp["thickness"])
-                    PhysicalLayerStack.append(tmp)
-            break
-
-        for Layer in PhysicalLayerStack:
-            if not Layer["cu_layer"] == None:
-                CuStack[Layer["cu_layer"]] = {
-                    "thickness": Layer["thickness"],
-                    "name": Layer["layer"],
-                    "abs_height": Layer["abs_height"],
-                }
-                if Layer["thickness"] <= 0:
-                    raise Exception("Problematic layer thickness detected")
+            for Layer in PhysicalLayerStack:
+                if not Layer["cu_layer"] == None:
+                    CuStack[Layer["cu_layer"]] = {
+                        "thickness": Layer["thickness"],
+                        "name": Layer["layer"],
+                        "abs_height": Layer["abs_height"],
+                    }
+                    if Layer["thickness"] <= 0:
+                        raise Exception("Problematic layer thickness detected")
+    except:
+        print("ERROR: Reading the CuStack")
 
     if not CuStack:
         layers = search_recursive(parsed, "layers", all=True)
@@ -89,5 +97,8 @@ def Get_PCB_Stackup(ProjectPath="./test.kicad_pcb"):
                     "abs_height": float(layer[0]) / 20,  # arbitrary assumption
                 }
         print("estimated CuStack", CuStack)
+
+    if not 2 in CuStack:
+        CuStack[2] = CuStack[31]  # Bugfix KiCad 9
 
     return PhysicalLayerStack, CuStack
