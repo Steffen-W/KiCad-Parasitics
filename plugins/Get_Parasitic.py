@@ -93,7 +93,7 @@ def Get_Parasitic(data, CuStack, conn1, conn2, netcode):
 
     Area = {l: 0 for l in range(32)}  # for all layer
 
-    for uuid, d in list(data.items()):
+    for uuid, d in data.items():
         if not netcode == d["NetCode"]:
             continue
 
@@ -102,7 +102,15 @@ def Get_Parasitic(data, CuStack, conn1, conn2, netcode):
                 Layer1 = d["Layer"][i - 1]
                 Layer2 = d["Layer"][i]
                 thickness = CuStack[0]["thickness"]  # from Layer Top
-                distance = CuStack[Layer2]["abs_height"] - CuStack[Layer1]["abs_height"]
+                if Layer2 in CuStack and Layer1 in CuStack:
+                    distance = (
+                        CuStack[Layer2]["abs_height"] - CuStack[Layer1]["abs_height"]
+                    )
+                else:
+                    print("ERROR: CuStack is incomplete!")
+                    print("Layer", d["Layer"])
+                    print(CuStack)
+                    continue
                 if "Drill" not in d:
                     continue
                 resistor = calcResVIA(d["Drill"], distance, cu_thickness=thickness)
