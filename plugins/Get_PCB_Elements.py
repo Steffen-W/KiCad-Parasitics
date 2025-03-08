@@ -39,19 +39,7 @@ def IsPointInPolygon(point_, polygon_):
     return inside
 
 
-# def getMember(obj, small=True):
-#     import inspect
-#     from pprint import pprint
-
-#     members = inspect.getmembers(obj, predicate=inspect.ismethod)
-#     if small:
-#         for m in members:
-#             print(m[0])
-#     else:
-#         pprint(members)
-
-
-def getHash(obj):
+def getHash(obj: pcbnew.EDA_ITEM):
     return obj.m_Uuid.Hash()
 
 
@@ -59,17 +47,20 @@ def getHashList(objlist):
     return [getHash(obj) for obj in objlist]
 
 
-def getPolygon(obj):
-    poly_obj = obj.GetEffectivePolygon()
+def getPolygon(obj: pcbnew.PAD):
+    try:
+        poly_obj = obj.GetEffectivePolygon()
+    except:
+        poly_obj = obj.GetEffectivePolygon(aLayer=0)  # TODO correct layer
     Polygon = [ToMM(poly_obj.CVertex(p)) for p in range(poly_obj.FullPointCount())]
     return Polygon
 
 
-def getLayer(obj, PossibleLayer=set([0, 31])):
+def getLayer(obj: pcbnew.BOARD_ITEM, PossibleLayer=set([0, 31])):
     return sorted(set(obj.GetLayerSet().CuStack()) & PossibleLayer)
 
 
-def getConnections(track, connect):
+def getConnections(track: pcbnew.PCB_TRACK, connect: pcbnew.CONNECTIVITY_DATA):
     def getVectorLen(vector):
         return np.sqrt(vector.dot(vector))
 
@@ -81,10 +72,6 @@ def getConnections(track, connect):
         wirePos = np.array(wirePos)
 
         diffVector = objPos - wirePos
-        # if getVectorLen(diffVector) > width / 2:
-        #     return wirePos + width / 2 * diffVector / getVectorLen(diffVector)
-        # else:
-        #     return wirePos
 
         x = np.sign(diffVector[0]) * min([abs(diffVector[0]), width / 2])
         y = np.sign(diffVector[1]) * min([abs(diffVector[1]), width / 2])
@@ -140,20 +127,18 @@ def getConnections(track, connect):
 
 
 def Get_PCB_Elements(board: pcbnew.BOARD, connect: pcbnew.CONNECTIVITY_DATA):
-    # RunSimulation()
-
-    DesignSettings = board.GetDesignSettings()
-    BoardThickness = ToMM(DesignSettings.GetBoardThickness())
-    print("BoardThickness", BoardThickness)
+    DesignSettings: pcbnew.BOARD_DESIGN_SETTINGS = board.GetDesignSettings()
     PossibleLayer = set(DesignSettings.GetEnabledLayers().CuStack())
+    BoardThickness = ToMM(DesignSettings.GetBoardThickness())
 
-    print("GetTracks", len(board.GetTracks()))
-    print("GetAreaCount", board.GetAreaCount())
-    print("GetPads", len(board.GetPads()))
-    print("AllConnectedItems", len(board.AllConnectedItems()))
-    print("GetFootprints", len(board.GetFootprints()))
-    print("GetDrawings", len(board.GetDrawings()))
-    print("GetAllNetClasses", len(board.GetAllNetClasses()))
+    # print(f"BoardThickness {BoardThickness}mm")
+    # print("GetTracks", len(board.GetTracks()))
+    # print("GetAreaCount", board.GetAreaCount())
+    # print("GetPads", len(board.GetPads()))
+    # print("AllConnectedItems", len(board.AllConnectedItems()))
+    # print("GetFootprints", len(board.GetFootprints()))
+    # print("GetDrawings", len(board.GetDrawings()))
+    # print("GetAllNetClasses", len(board.GetAllNetClasses()))
 
     ItemList = {}
 
@@ -202,45 +187,62 @@ def Get_PCB_Elements(board: pcbnew.BOARD, connect: pcbnew.CONNECTIVITY_DATA):
         temp["IsSelected"] = track.IsSelected()
         ItemList[temp["id"]] = temp
 
-    for Pad in board.AllConnectedItems():
-        temp = {"Layer": getLayer(Pad, PossibleLayer)}
-        if type(Pad) is pcbnew.PAD:
+    for item in board.AllConnectedItems():
+        temp = {"Layer": getLayer(item, PossibleLayer)}
+        if type(item) is pcbnew.PAD:
             temp["type"] = "PAD"
-            temp["Shape"] = Pad.GetShape()
+            temp["Shape"] = item.GetShape()
             # temp["PadAttr"] = Pad.ShowPadAttr()
             # temp["IsFlipped"] = Pad.IsFlipped()
-            temp["Position"] = ToMM(Pad.GetPosition())
-            temp["Size"] = ToMM(Pad.GetSize())
-            temp["Orientation"] = Pad.GetOrientation().AsDegrees()
-            temp["DrillSize"] = ToMM(Pad.GetDrillSize())
+            temp["Position"] = ToMM(item.GetPosition())
+            temp["Size"] = ToMM(item.GetSize())
+            temp["Orientation"] = item.GetOrientation().AsDegrees()
+            temp["DrillSize"] = ToMM(item.GetDrillSize())
             temp["Drill"] = temp["DrillSize"][0]
-            temp["Area"] = ToMM(ToMM(Pad.GetEffectivePolygon().Area()))
-            temp["PadName"] = Pad.GetPadName()
+            Layers = temp.get("Layer", [])
+
+            if len(Layers):
+                try:
+                    poly_obj = item.GetEffectivePolygon()
+                except:
+                    poly_obj = item.GetEffectivePolygon(aLayer=Layers[0])
+
+                temp["Area"] = ToMM(ToMM(poly_obj.Area()))
+            else:
+                temp["Area"] = 0
+
+            temp["PadName"] = item.GetPadName()
             # temp["FootprintUUID"] = getHash(Pad.GetParent())
             # if Pad.GetParent():
             #     temp["FootprintReference"] = Pad.GetParent().GetReference()
 
-        elif type(Pad) is pcbnew.ZONE:
+        elif type(item) is pcbnew.ZONE:
             # pcbnew.ZONE().GetZoneName
-            if "teardrop" in Pad.GetZoneName():
+            if "teardrop" in item.GetZoneName():
                 continue
             temp["type"] = "ZONE"
-            temp["Position"] = ToMM(Pad.GetPosition())
-            temp["Area"] = ToMM(ToMM(Pad.GetFilledArea()))
-            temp["NumCorners"] = Pad.GetNumCorners()
-            temp["ZoneName"] = Pad.GetZoneName()
+            temp["Position"] = ToMM(item.GetPosition())
+            temp["Area"] = ToMM(ToMM(item.GetFilledArea()))
+            temp["NumCorners"] = item.GetNumCorners()
+            temp["ZoneName"] = item.GetZoneName()
+        elif type(item) is pcbnew.PCB_TRACK:
+            continue  # already in board.GetTracks()
+        elif type(item) is pcbnew.BOARD_CONNECTED_ITEM:
+            if item.GetNetCode() == 0:
+                continue
+            print("type", type(item), "is not considered!")
+            continue
         else:
-            if not type(track) == pcbnew.PCB_TRACK:
-                print("type", type(track), "is not considered!")
+            print("type", type(item), "is not considered!")
             continue
 
-        temp["Netname"] = Pad.GetNetname()
-        temp["NetCode"] = Pad.GetNetCode()
-        temp["id"] = getHash(Pad)
-        temp["IsSelected"] = Pad.IsSelected()
+        temp["Netname"] = item.GetNetname()
+        temp["NetCode"] = item.GetNetCode()
+        temp["id"] = getHash(item)
+        temp["IsSelected"] = item.IsSelected()
         temp["connStart"] = sorted(
-            getHashList(connect.GetConnectedPads(Pad))
-            + getHashList(connect.GetConnectedTracks(Pad))
+            getHashList(connect.GetConnectedPads(item))
+            + getHashList(connect.GetConnectedTracks(item))
         )
         ItemList[temp["id"]] = temp
 
