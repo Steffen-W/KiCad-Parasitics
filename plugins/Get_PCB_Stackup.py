@@ -8,7 +8,7 @@ except:
 import re
 
 
-def extract_layer_from_string(input_string):
+def extract_layer_from_string_old(input_string):
     if input_string == "F.Cu":
         return 0
     elif input_string == "B.Cu":
@@ -17,6 +17,19 @@ def extract_layer_from_string(input_string):
         match = re.search(r"In(\d+)\.Cu", input_string)
         if match:
             return int(match.group(1))
+    return None
+
+
+def extract_layer_from_string(input_string):  # kicad >=9.0
+    if input_string == "F.Cu":
+        return 0
+    elif input_string == "B.Cu":
+        return 2
+    else:
+        match = re.match(r"In(\d+)\.Cu", input_string)
+        if match:
+            inner_index = int(match.group(1))
+            return 2 * inner_index + 2  # In1_Cu = 4, In2_Cu = 6, ...
     return None
 
 

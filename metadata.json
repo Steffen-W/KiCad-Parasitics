@@ -29,9 +29,9 @@
     ],
     "versions": [
         {
-            "version": "2023.xx.xx",
+            "version": "2025.xx.xx",
             "status": "stable",
-            "kicad_version": "7.00"
+            "kicad_version": "9.00"
         }
     ]
 }

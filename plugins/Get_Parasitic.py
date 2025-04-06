@@ -103,7 +103,7 @@ def Get_Parasitic(data, CuStack, conn1, conn2, netcode):
                 Layer2 = d["Layer"][i]
                 thickness = CuStack[0]["thickness"]  # from Layer Top
                 if Layer2 in CuStack and Layer1 in CuStack:
-                    distance = (
+                    distance = abs(
                         CuStack[Layer2]["abs_height"] - CuStack[Layer1]["abs_height"]
                     )
                 else:
@@ -114,6 +114,8 @@ def Get_Parasitic(data, CuStack, conn1, conn2, netcode):
                 if "Drill" not in d:
                     continue
                 resistor = calcResVIA(d["Drill"], distance, cu_thickness=thickness)
+                if resistor < 0:
+                    raise ValueError("Error in resistance calculation!")
                 resistors.append(
                     [d["netStart"][Layer1], d["netStart"][Layer2], resistor, distance]
                 )
@@ -136,6 +138,8 @@ def Get_Parasitic(data, CuStack, conn1, conn2, netcode):
                 netEnd = d["netEnd"][Layer]
                 thickness = CuStack[Layer]["thickness"]
                 resistor = calcResWIRE(d["Length"], d["Width"], cu_thickness=thickness)
+                if resistor < 0:
+                    raise ValueError("Error in resistance calculation!")
                 resistors.append([netStart, netEnd, resistor, d["Length"]])
 
                 coordinates[d["netStart"][Layer]] = (
