@@ -1,0 +1,28 @@
+{
+  "$schema": "https://go.kicad.org/api/schemas/v1",
+  "identifier": "com.github.Steffen-W.KiCad-Parasitics",
+  "name": "Parasitics",
+  "description": "Plugin to analyze the wires in the PCB editor.",
+  "runtime": {
+    "type": "python",
+    "version": "3"
+  },
+  "actions": [
+    {
+      "identifier": "Parasitics-action",
+      "name": "Parasitics Action",
+      "description": "Plugin to analyze the wires in the PCB editor.",
+      "show-button": true,
+      "scopes": [
+        "pcb"
+      ],
+      "entrypoint": "__init__.py",
+      "icons-light": [
+        "icon.png"
+      ],
+      "icons-dark": [
+        "icon.png"
+      ]
+    }
+  ]
+}
