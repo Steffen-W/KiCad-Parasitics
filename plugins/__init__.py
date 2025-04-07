@@ -35,7 +35,12 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
 
             # KiCad_CommonSettings = Settings.GetCommonSettings()
             KiCad_UserSettingsPath = Settings.GetUserSettingsPath()
-            KiCad_SettingsVersion = Settings.GetSettingsVersion()
+            KiCad_SettingsVersion = str(Settings.GetSettingsVersion())
+            try:
+                new_v9 = int(KiCad_SettingsVersion.split(".")[0]) >= 9
+            except:
+                print("KiCad_SettingsVersion", KiCad_SettingsVersion)
+                new_v9 = True
             board_FileName = Path(board.GetFileName())
 
             ####################################################
@@ -70,7 +75,7 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
             ####################################################
 
             PhysicalLayerStack, CuStack = Get_PCB_Stackup_fun(
-                ProjectPath=board_FileName
+                ProjectPath=board_FileName, new_v9=new_v9
             )
             if debug:
                 pprint(CuStack)
@@ -129,15 +134,15 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
                 else:
                     message += "\nNo connection was found between the two marked points"
 
-                message += "\n"
-                if inductance_nH > 0:
-                    message += "\nThe determined self-inductance ≈ "
-                    message += "{:.3f} nH".format(inductance_nH)
-                    message += "\nHere it was assumed that the line is free without ground planes."
-                    message += "\nThe result is to be taken with special caution!"
-                else:
-                    message += "\nThe determined self-inductance ≈ NAN"
-                    message += "\nFor direct and uninterrupted connections the calculation is not applicable."
+                # message += "\n"
+                # if inductance_nH > 0:
+                #     message += "\nThe determined self-inductance ≈ "
+                #     message += "{:.3f} nH".format(inductance_nH)
+                #     message += "\nHere it was assumed that the line is free without ground planes."
+                #     message += "\nThe result is to be taken with special caution!"
+                # else:
+                #     message += "\nThe determined self-inductance ≈ NAN"
+                #     message += "\nFor direct and uninterrupted connections the calculation is not applicable."
 
                 message += "\n"
                 if len(Area) > 0:

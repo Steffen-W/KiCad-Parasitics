@@ -176,7 +176,7 @@ def Get_Parasitic(data, CuStack, conn1, conn2, netcode):
     try:
         if len(path3d) > 2:
             vertices = interpolate_vertices(path3d, num_points=1000)
-            inductance_nH = calculate_self_inductance(vertices, current=1) * 1e9
+            inductance_nH = 0  # calculate_self_inductance(vertices, current=1) * 1e9
     except Exception as e:
         inductance_nH = 0
         print(traceback.format_exc())

@@ -8,7 +8,7 @@ except:
 import re
 
 
-def extract_layer_from_string_old(input_string):
+def extract_layer_from_string_old(input_string):  # kicad <9.0
     if input_string == "F.Cu":
         return 0
     elif input_string == "B.Cu":
@@ -21,6 +21,7 @@ def extract_layer_from_string_old(input_string):
 
 
 def extract_layer_from_string(input_string):  # kicad >=9.0
+    # https://gitlab.com/kicad/code/kicad/-/commit/5e0abadb23425765e164f49ee2f893e94ddb97fc
     if input_string == "F.Cu":
         return 0
     elif input_string == "B.Cu":
@@ -48,7 +49,7 @@ def search_recursive(line: list, entry: str, all=False):
     return None
 
 
-def Get_PCB_Stackup_fun(ProjectPath="./test.kicad_pcb"):
+def Get_PCB_Stackup_fun(ProjectPath="./test.kicad_pcb", new_v9=True):
     def readFile2var(path):
         if not exists(path):
             return None
@@ -82,7 +83,12 @@ def Get_PCB_Stackup_fun(ProjectPath="./test.kicad_pcb"):
                     tmp["type"] = search_recursive(layer, "type")
 
                     if not tmp["thickness"] == None:
-                        tmp["cu_layer"] = extract_layer_from_string(tmp["layer"])
+                        if new_v9:
+                            tmp["cu_layer"] = extract_layer_from_string(tmp["layer"])
+                        else:
+                            tmp["cu_layer"] = extract_layer_from_string_old(
+                                tmp["layer"]
+                            )
                         tmp["abs_height"] = abs_height
                         abs_height += float(tmp["thickness"])
                         PhysicalLayerStack.append(tmp)
@@ -110,8 +116,5 @@ def Get_PCB_Stackup_fun(ProjectPath="./test.kicad_pcb"):
                     "abs_height": float(layer[0]) / 20,  # arbitrary assumption
                 }
         print("estimated CuStack", CuStack)
-
-    if not 2 in CuStack:
-        CuStack[2] = CuStack[31]  # Bugfix KiCad 9
 
     return PhysicalLayerStack, CuStack
