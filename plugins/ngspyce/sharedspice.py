@@ -45,6 +45,11 @@ else:  # Linux, etc.
         lib_location = os.environ['LIBNGSPICE']
     except KeyError:
         lib_location = find_library('ngspice')
+    
+    # try homebrew location as a last resort for MacOS
+    if lib_location is None and platform.system() == "Darwin":
+        lib_location = "/opt/homebrew/lib/libngspice.dylib"
+
     spice = CDLL(lib_location)
 
 captured_output = []
