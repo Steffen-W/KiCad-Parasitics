@@ -1,1 +1,4 @@
 kicad-python
+numpy
+matplotlib
+wxPython
