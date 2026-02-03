@@ -19,10 +19,34 @@ def dijkstra(graph, start_node):
     return distance, predecessor
 
 
+def find_all_reachable_nodes(graph, start_node):
+    """Find all nodes reachable from start_node using BFS"""
+    if start_node not in graph:
+        return set()
+    visited = set()
+    queue = [start_node]
+    visited.add(start_node)
+    while queue:
+        current = queue.pop(0)
+        for neighbor in graph[current].keys():
+            if neighbor not in visited:
+                visited.add(neighbor)
+                queue.append(neighbor)
+    return visited
+
 def find_shortest_path(graph, start_node, end_node):
+    if start_node not in graph:
+        raise ValueError(f"Start node {start_node} not in graph. Available nodes: {sorted(graph.keys())}")
+    if end_node not in graph:
+        raise ValueError(f"End node {end_node} not in graph. Available nodes: {sorted(graph.keys())}")
+    
     distance, predecessor_from_start1 = dijkstra(graph, start_node)
-    if math.isinf(distance[end_node]):
-        return None  # No path found
+    if end_node not in distance or math.isinf(distance[end_node]):
+        # Find all reachable nodes from start_node for debugging
+        reachable = find_all_reachable_nodes(graph, start_node)
+        raise ValueError(f"No path found from {start_node} to {end_node}. "
+                        f"Reachable from {start_node}: {len(reachable)} nodes. "
+                        f"End node {end_node} is {'reachable' if end_node in reachable else 'NOT reachable'}.")
     path = [end_node]
     while path[-1] != start_node:
         path.append(predecessor_from_start1[path[-1]])

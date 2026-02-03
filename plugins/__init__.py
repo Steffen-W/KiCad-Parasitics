@@ -27,7 +27,30 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
 
     def Run(self):
         try:
+            # Enable debug mode for troubleshooting
+            # Set to 1 to enable debug output and file saving
             debug = 0
+            
+            # Debug log file location
+            debug_log_file = None
+            if debug:
+                debug_log_file = os.path.join(self.plugin_path, "parasitics_debug.log")
+                # Clear previous log
+                with open(debug_log_file, "w") as f:
+                    f.write("=" * 60 + "\n")
+                    f.write("Parasitics Plugin Debug Log\n")
+                    f.write("=" * 60 + "\n\n")
+
+            def debug_print(msg):
+                """Print debug message to both console and log file"""
+                if debug:
+                    print(msg)  # Still print to console (if available)
+                    if debug_log_file:
+                        try:
+                            with open(debug_log_file, "a", encoding="utf-8") as f:
+                                f.write(msg + "\n")
+                        except:
+                            pass  # Don't fail if we can't write to log
 
             board = pcbnew.GetBoard()
             connect = board.GetConnectivity()
@@ -39,7 +62,7 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
             try:
                 new_v9 = int(KiCad_SettingsVersion.split(".")[0]) >= 9
             except:
-                print("KiCad_SettingsVersion", KiCad_SettingsVersion)
+                debug_print(f"KiCad_SettingsVersion: {KiCad_SettingsVersion}")
                 new_v9 = True
             board_FileName = Path(board.GetFileName())
 
@@ -48,6 +71,8 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
             ####################################################
 
             ItemList = Get_PCB_Elements(board, connect)
+            
+            debug_print(f"[DEBUG] Found {len(ItemList)} PCB elements")
 
             ####################################################
             # save Variable ItemList to file (for debug)
@@ -55,7 +80,7 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
 
             if debug:
                 save_as_file = os.path.join(self.plugin_path, "ItemList.py")
-                print("save_as_file", save_as_file)
+                debug_print(f"[DEBUG] Saving ItemList to: {save_as_file}")
                 SaveDictToFile(ItemList, save_as_file)
                 with open(save_as_file, "a") as f:
                     f.write('\nboard_FileName = "')
@@ -67,8 +92,26 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
             ####################################################
 
             data = Connect_Nets(ItemList)
+            
             if debug:
-                pprint(data)
+                # Check for wires with invalid netStart/netEnd after Connect_Nets
+                invalid_wires = []
+                for uuid, d in data.items():
+                    if d.get("type") == "WIRE":
+                        for layer in d.get("Layer", []):
+                            netStart = d.get("netStart", {}).get(layer, 0)
+                            netEnd = d.get("netEnd", {}).get(layer, 0)
+                            if netStart == 0 or netEnd == 0:
+                                invalid_wires.append((uuid, layer, netStart, netEnd, d.get("Start"), d.get("End"), d.get("connStart"), d.get("connEnd")))
+                
+                if invalid_wires:
+                    debug_print(f"[DEBUG] WARNING: {len(invalid_wires)} wires have invalid netStart/netEnd after Connect_Nets!")
+                    for uuid, layer, ns, ne, start, end, connS, connE in invalid_wires[:5]:
+                        debug_print(f"[DEBUG]   WIRE {uuid} L{layer}: netStart={ns}, netEnd={ne}, Start={start}, End={end}")
+                        debug_print(f"[DEBUG]     connStart={connS}, connEnd={connE}")
+                
+                from pprint import pprint
+                # pprint(data)  # Too verbose, comment out
 
             ####################################################
             # read PhysicalLayerStack from file
@@ -78,6 +121,7 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
                 ProjectPath=board_FileName, new_v9=new_v9
             )
             if debug:
+                from pprint import pprint
                 pprint(CuStack)
 
             ####################################################
@@ -85,26 +129,79 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
             ####################################################
 
             Selected = [d for uuid, d in data.items() if d["IsSelected"]]
+            
+            debug_print(f"[DEBUG] Found {len(Selected)} selected elements")
+            for i, sel in enumerate(Selected):
+                debug_print(f"[DEBUG] Selected {i+1}: type={sel.get('type')}, NetCode={sel.get('NetCode')}, "
+                          f"Netname={sel.get('Netname')}, Layer={sel.get('Layer')}")
 
             message = ""
             if len(Selected) == 2:
-                conn1 = Selected[0]["netStart"][Selected[0]["Layer"][0]]
-                conn2 = Selected[1]["netStart"][Selected[1]["Layer"][0]]
+                # Get connection points - try all layers to find a path
                 NetCode = Selected[0]["NetCode"]
+                
+                debug_print(f"[DEBUG] Selected[0] Layer: {Selected[0]['Layer']}")
+                debug_print(f"[DEBUG] Selected[1] Layer: {Selected[1]['Layer']}")
+                # Show all netStart values for each selected via on all layers
+                for i, sel in enumerate(Selected):
+                    debug_print(f"[DEBUG] Selected[{i}] netStart values by layer:")
+                    for layer in sel.get("Layer", []):
+                        netStart_val = sel.get("netStart", {}).get(layer, "NOT_SET")
+                        debug_print(f"[DEBUG]   Layer {layer}: netStart={netStart_val}")
+                
                 if not NetCode == Selected[1]["NetCode"]:
                     message = "The marked points are not in the same network."
+                    debug_print(f"[DEBUG] ERROR: NetCodes don't match: {NetCode} != {Selected[1]['NetCode']}")
             else:
                 message = "You have to mark exactly two elements."
                 message += " Preferably pads or vias."
+                debug_print(f"[DEBUG] ERROR: Expected 2 selected elements, found {len(Selected)}")
 
             if message == "":
-                (
-                    Resistance,
-                    Distance,
-                    inductance_nH,
-                    short_path_RES,
-                    Area,
-                ) = Get_Parasitic(data, CuStack, conn1, conn2, NetCode)
+                # Try to find a path using any layer combination
+                # Start with first layer of each, but try all combinations if that fails
+                best_result = None
+                best_distance = float("inf")
+                
+                for layer1 in Selected[0].get("Layer", []):
+                    conn1 = Selected[0]["netStart"].get(layer1, 0)
+                    if conn1 == 0:
+                        continue
+                    for layer2 in Selected[1].get("Layer", []):
+                        conn2 = Selected[1]["netStart"].get(layer2, 0)
+                        if conn2 == 0:
+                            continue
+                        
+                        debug_print(f"[DEBUG] Trying path: conn1={conn1} (L{layer1}) -> conn2={conn2} (L{layer2})")
+                        
+                        (
+                            Resistance,
+                            Distance,
+                            inductance_nH,
+                            short_path_RES,
+                            Area,
+                        ) = Get_Parasitic(data, CuStack, conn1, conn2, NetCode, debug=debug, debug_print=debug_print)
+                        
+                        # If we found a path, use it (prefer shorter distances)
+                        if not math.isinf(Distance) and Distance < best_distance:
+                            best_distance = Distance
+                            best_result = (Resistance, Distance, inductance_nH, short_path_RES, Area)
+                            debug_print(f"[DEBUG] Found path! Distance={Distance}, using this combination")
+                
+                if best_result:
+                    Resistance, Distance, inductance_nH, short_path_RES, Area = best_result
+                else:
+                    # Fall back to first layer if no path found
+                    conn1 = Selected[0]["netStart"][Selected[0]["Layer"][0]]
+                    conn2 = Selected[1]["netStart"][Selected[1]["Layer"][0]]
+                    debug_print(f"[DEBUG] No path found with any layer combination, using first layer: conn1={conn1}, conn2={conn2}")
+                    (
+                        Resistance,
+                        Distance,
+                        inductance_nH,
+                        short_path_RES,
+                        Area,
+                    ) = Get_Parasitic(data, CuStack, conn1, conn2, NetCode, debug=debug, debug_print=debug_print)
 
                 message += "\nShortest distance between the two points ≈ "
                 message += "{:.3f} mm".format(Distance)
@@ -122,6 +219,9 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
                     message += "conductive and short-circuit points. This is probably the case here."
                 else:
                     message += "\nNo connection was found between the two marked points"
+                    if debug:
+                        message += f"\n[DEBUG: Check debug log file for details]"
+                        message += f"\nDebug log: {debug_log_file}"
 
                 if not math.isinf(Resistance) and Resistance >= 0:
                     message += "\nResistance between both points  ≈ "
@@ -133,6 +233,9 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
                     message += " path is however uninfluenced."
                 else:
                     message += "\nNo connection was found between the two marked points"
+                    if debug:
+                        message += f"\n[DEBUG: Check debug log file for details]"
+                        message += f"\nDebug log: {debug_log_file}"
 
                 # message += "\n"
                 # if inductance_nH > 0:
@@ -173,9 +276,11 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
             #     Plot_PCB(data)
 
         except Exception as e:
+            error_msg = traceback.format_exc()
+            print("[FATAL ERROR]", error_msg)
             dlg = wx.MessageDialog(
                 None,
-                traceback.format_exc(),
+                error_msg,
                 "Fatal Error",
                 wx.OK | wx.ICON_ERROR,
             )
