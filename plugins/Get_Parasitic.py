@@ -6,7 +6,6 @@ import traceback
 
 try:
     if __name__ == "__main__":
-        from Get_Self_Inductance import interpolate_vertices
         from Get_Distance import (
             find_shortest_path,
             get_graph_from_edges,
@@ -14,7 +13,6 @@ try:
         )
         import ngspyce
     else:
-        from .Get_Self_Inductance import interpolate_vertices
         from .Get_Distance import (
             find_shortest_path,
             get_graph_from_edges,
@@ -279,11 +277,10 @@ def Get_Parasitic(data, CuStack, conn1, conn2, netcode, debug=0, debug_print=Non
 
     try:
         Distance, path = find_shortest_path(graph, conn1, conn2)
-        path3d = [coordinates[p] for p in path]
         short_path_RES = Get_shortest_path_RES(path, resistors)
     except Exception as e:
         short_path_RES = -1
-        Distance, path3d = float("inf"), []
+        Distance = float("inf")
         debug_print(f"[DEBUG] Path finding failed: {e}")
         debug_print(f"[DEBUG] Graph: {len(graph)} nodes, {len(edges)} edges")
         if conn1 not in graph:
@@ -294,16 +291,6 @@ def Get_Parasitic(data, CuStack, conn1, conn2, netcode, debug=0, debug_print=Non
             reachable = find_all_reachable_nodes(graph, conn1)
             debug_print(f"[DEBUG] conn2 reachable from conn1: {conn2 in reachable}")
 
-    inductance_nH = 0
-    try:
-        if len(path3d) > 2:
-            interpolate_vertices(path3d, num_points=1000)
-            inductance_nH = 0  # calculate_self_inductance(vertices, current=1) * 1e9
-    except Exception:
-        inductance_nH = 0
-        print(traceback.format_exc())
-        print("ERROR in calculate_self_inductance")
-
     try:
         Resistance = RunSimulation(resistors, conn1, conn2)
     except Exception:
@@ -311,4 +298,4 @@ def Get_Parasitic(data, CuStack, conn1, conn2, netcode, debug=0, debug_print=Non
         print(traceback.format_exc())
         print("ERROR in RunSimulation")
 
-    return Resistance, Distance, inductance_nH, short_path_RES, Area_reduc
+    return Resistance, Distance, short_path_RES, Area_reduc

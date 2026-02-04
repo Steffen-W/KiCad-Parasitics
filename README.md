@@ -1,6 +1,6 @@
 # KiCad-Parasitics
 
-Plugin to analyze the wires in the PCB editor. To use the plugin, two points must be marked on the board. This is best two pads that are connected with a wire. The tool then determines the DC resistance between the two points. A parasitic inductance is also estimated. In future versions, the parasitic capacitance to the ground plane will be determined.
+Plugin to analyze the wires in the PCB editor. To use the plugin, two points must be marked on the board. This is best two pads that are connected with a wire. The tool then determines the DC resistance between the two points.
 
 # How It Works
 

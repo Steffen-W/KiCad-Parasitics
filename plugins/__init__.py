@@ -166,7 +166,6 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
                         (
                             Resistance,
                             Distance,
-                            inductance_nH,
                             short_path_RES,
                             Area,
                         ) = Get_Parasitic(
@@ -184,16 +183,13 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
                             best_result = (
                                 Resistance,
                                 Distance,
-                                inductance_nH,
                                 short_path_RES,
                                 Area,
                             )
                             best_conn = (conn1, conn2, layer1, layer2)
 
                 if best_result:
-                    Resistance, Distance, inductance_nH, short_path_RES, Area = (
-                        best_result
-                    )
+                    Resistance, Distance, short_path_RES, Area = best_result
                     if debug and best_conn:
                         debug_print(
                             f"[DEBUG] Best path: conn1={best_conn[0]}, conn2={best_conn[1]}, "
@@ -206,7 +202,6 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
                     (
                         Resistance,
                         Distance,
-                        inductance_nH,
                         short_path_RES,
                         Area,
                     ) = Get_Parasitic(
@@ -317,13 +312,12 @@ if __name__ == "__main__":
         if not NetCode == Selected[1]["NetCode"]:
             print("The marked points are not in the same network.")
 
-        Resistance, Distance, inductance_nH, short_path_RES, Area = Get_Parasitic_fn(
+        Resistance, Distance, short_path_RES, Area = Get_Parasitic_fn(
             data, CuStack, conn1, conn2, NetCode
         )
         print(f"Distance {Distance} mm")
         print(f"Resistance {Resistance} mOhm")
         print(f"Resistance {short_path_RES} mOhm (only short path)")
-        print(f"inductance {inductance_nH} nH")
 
         if len(Area) > 0:
             for layer in Area.keys():
