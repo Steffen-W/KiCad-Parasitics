@@ -17,14 +17,14 @@ def Plot_PCB(data):
 
     def NameNetInPlot(uuid, layer, active=True, netStart=True):
         if netStart:
-            text = data[uuid]["netStart"]
-            if "Start" in data[uuid]:
-                pos = data[uuid]["Start"]
+            text = data[uuid]["net_start"]
+            if "start" in data[uuid]:
+                pos = data[uuid]["start"]
             else:
-                pos = data[uuid]["Position"]
+                pos = data[uuid]["position"]
         else:
-            text = data[uuid]["netEnd"]
-            pos = data[uuid]["End"]
+            text = data[uuid]["net_end"]
+            pos = data[uuid]["end"]
         if layer == 0:
             plt.text(
                 *pos,
@@ -50,12 +50,12 @@ def Plot_PCB(data):
 
     for uuid, d in list(data.items()):
         if d["type"] == "VIA":
-            circ = Circle(d["Position"], d["Width"] / 2, color="grey", alpha=0.5)
+            circ = Circle(d["position"], d["width"] / 2, color="grey", alpha=0.5)
             axes.add_artist(circ)
-            if "Drill" in d:
-                axes.add_artist(Circle(d["Position"], d["Drill"] / 2, color="w"))
-            # plt.text(*d["Position"], str(data[uuid]["netStart"]))
-            for layer in d["Layer"]:
+            if "drill" in d:
+                axes.add_artist(Circle(d["position"], d["drill"] / 2, color="w"))
+            # plt.text(*d["position"], str(data[uuid]["net_start"]))
+            for layer in d["layer"]:
                 NameNetInPlot(uuid, layer)
 
     def plotwire(Start, End, Width, layer, uuid):
@@ -77,33 +77,33 @@ def Plot_PCB(data):
 
     for uuid, d in list(data.items()):
         if d["type"] == "WIRE":
-            plotwire(d["Start"], d["End"], d["Width"], d["Layer"][0], uuid)
-            # data[uuid]["R"] = calcResWIRE(d["Start"], d["End"], d["Width"])
+            plotwire(d["start"], d["end"], d["width"], d["layer"][0], uuid)
+            # data[uuid]["R"] = calcResWIRE(d["start"], d["end"], d["width"])
 
     for uuid, d in list(data.items()):
         if d["type"] == "PAD":
-            if d["Shape"] in {0, 2}:  # oval
+            if d["shape"] in {0, 2}:  # oval
                 ellip = Ellipse(
-                    d["Position"],
-                    *d["Size"],
-                    color=Color[d["Layer"][0]],
+                    d["position"],
+                    *d["size"],
+                    color=Color[d["layer"][0]],
                     alpha=0.5,
-                    angle=d["Orientation"],
+                    angle=d["orientation"],
                 )
                 axes.add_patch(ellip)
             else:
                 rec = Rectangle(
-                    np.array(d["Position"]) - np.array(d["Size"]) / 2,
-                    width=d["Size"][0],
-                    height=d["Size"][1],
-                    color=Color[d["Layer"][0]],
+                    np.array(d["position"]) - np.array(d["size"]) / 2,
+                    width=d["size"][0],
+                    height=d["size"][1],
+                    color=Color[d["layer"][0]],
                     alpha=0.5,
                     transform=Affine2D().rotate_deg_around(
-                        *d["Position"], d["Orientation"]
+                        *d["position"], d["orientation"]
                     )
                     + axes.transData,
                 )
                 axes.add_patch(rec)
-            NameNetInPlot(uuid, d["Layer"][0])
+            NameNetInPlot(uuid, d["layer"][0])
 
     plt.show()

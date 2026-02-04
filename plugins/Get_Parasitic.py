@@ -275,24 +275,24 @@ def Get_Parasitic(data, CuStack, conn1, conn2, netcode, debug=0, debug_print=Non
     Area = {layer_idx: 0 for layer_idx in range(32)}
 
     for uuid, d in data.items():
-        if not netcode == d["NetCode"]:
+        if not netcode == d["net_code"]:
             continue
 
-        if len(d["Layer"]) > 1:
+        if len(d["layer"]) > 1:
             # Multi-layer element (VIA or through-hole PAD)
             # Collect all valid nodes for this element
             nodes = []
-            for layer in d["Layer"]:
+            for layer in d["layer"]:
                 if layer not in CuStack:
                     debug_print(f"WARNING: Layer {layer} not in CuStack, skipping")
                     continue
-                if layer in d.get("netStart", {}):
-                    node = d["netStart"][layer]
+                if layer in d.get("net_start", {}):
+                    node = d["net_start"][layer]
                     if node > 0:
                         nodes.append((layer, node))
                         coordinates[node] = (
-                            d["Position"][0],
-                            d["Position"][1],
+                            d["position"][0],
+                            d["position"][1],
                             CuStack[layer]["abs_height"],
                         )
 
@@ -309,14 +309,14 @@ def Get_Parasitic(data, CuStack, conn1, conn2, netcode, debug=0, debug_print=Non
                                 f"ERROR: CuStack incomplete for layers {Layer1}, {Layer2}"
                             )
                             continue
-                        if "Drill" not in d:
+                        if "drill" not in d:
                             continue
                         distance = abs(
                             CuStack[Layer2]["abs_height"]
                             - CuStack[Layer1]["abs_height"]
                         )
                         resistor = calcResVIA(
-                            d["Drill"], distance, cu_thickness=thickness
+                            d["drill"], distance, cu_thickness=thickness
                         )
                         if resistor < 0:
                             raise ValueError("Error in resistance calculation!")
@@ -326,26 +326,26 @@ def Get_Parasitic(data, CuStack, conn1, conn2, netcode, debug=0, debug_print=Non
                             "nodes": (node1, node2),
                             "resistance": resistor,
                             "length": distance,
-                            "drill": d["Drill"],
+                            "drill": d["drill"],
                             "layer1": Layer1,
                             "layer2": Layer2,
                             "layer1_name": CuStack[Layer1]["name"],
                             "layer2_name": CuStack[Layer2]["name"],
-                            "position": d["Position"],
+                            "position": d["position"],
                             "cu_thickness": thickness,
                         })
 
         else:
-            Layer = d["Layer"][0]
-            Area[Layer] += d["Area"]
+            Layer = d["layer"][0]
+            Area[Layer] += d["area"]
 
             if Layer not in CuStack:
                 debug_print(f"WARNING: Layer {Layer} not in CuStack, skipping element")
                 continue
 
             if d["type"] == "WIRE":
-                netStart = d["netStart"].get(Layer, 0)
-                netEnd = d["netEnd"].get(Layer, 0)
+                netStart = d["net_start"].get(Layer, 0)
+                netEnd = d["net_end"].get(Layer, 0)
 
                 if netStart == 0 or netEnd == 0:
                     debug_print(
@@ -355,42 +355,42 @@ def Get_Parasitic(data, CuStack, conn1, conn2, netcode, debug=0, debug_print=Non
                     continue
 
                 thickness = CuStack[Layer]["thickness"]
-                resistor = calcResWIRE(d["Length"], d["Width"], cu_thickness=thickness)
+                resistor = calcResWIRE(d["length"], d["width"], cu_thickness=thickness)
                 if resistor < 0:
                     raise ValueError("Error in resistance calculation!")
-                resistors.append([netStart, netEnd, resistor, d["Length"]])
+                resistors.append([netStart, netEnd, resistor, d["length"]])
                 network_info.append({
                     "type": "WIRE",
                     "nodes": (netStart, netEnd),
                     "resistance": resistor,
-                    "length": d["Length"],
-                    "width": d["Width"],
+                    "length": d["length"],
+                    "width": d["width"],
                     "layer": Layer,
                     "layer_name": CuStack[Layer]["name"],
-                    "start": d["Start"],
-                    "end": d["End"],
+                    "start": d["start"],
+                    "end": d["end"],
                     "cu_thickness": thickness,
                 })
 
                 coordinates[netStart] = (
-                    d["Start"][0],
-                    d["Start"][1],
+                    d["start"][0],
+                    d["start"][1],
                     CuStack[Layer]["abs_height"],
                 )
                 coordinates[netEnd] = (
-                    d["End"][0],
-                    d["End"][1],
+                    d["end"][0],
+                    d["end"][1],
                     CuStack[Layer]["abs_height"],
                 )
 
             elif d["type"] == "PAD":
                 # Single-layer pad - just record its position
-                if Layer in d.get("netStart", {}):
-                    node = d["netStart"][Layer]
+                if Layer in d.get("net_start", {}):
+                    node = d["net_start"][Layer]
                     if node > 0:
                         coordinates[node] = (
-                            d["Position"][0],
-                            d["Position"][1],
+                            d["position"][0],
+                            d["position"][1],
                             CuStack[Layer]["abs_height"],
                         )
 
@@ -401,11 +401,11 @@ def Get_Parasitic(data, CuStack, conn1, conn2, netcode, debug=0, debug_print=Non
     # Handle ZONES: connect all elements touching the same zone
     zone_connections = {}
     for uuid, d in data.items():
-        if netcode != d["NetCode"] or d["type"] != "ZONE":
+        if netcode != d["net_code"] or d["type"] != "ZONE":
             continue
 
-        zone_conns = d.get("connStart", [])
-        for layer in d.get("Layer", []):
+        zone_conns = d.get("conn_start", [])
+        for layer in d.get("layer", []):
             if layer not in zone_connections:
                 zone_connections[layer] = {}
             if uuid not in zone_connections[layer]:
@@ -415,21 +415,21 @@ def Get_Parasitic(data, CuStack, conn1, conn2, netcode, debug=0, debug_print=Non
                 if conn_uuid not in data:
                     continue
                 conn_item = data[conn_uuid]
-                if layer not in conn_item.get("Layer", []):
+                if layer not in conn_item.get("layer", []):
                     continue
 
                 if conn_item.get("type") == "WIRE":
                     # Only add the wire end that touches the zone
-                    for conn_type in ["connStart", "connEnd"]:
-                        net_type = "netStart" if conn_type == "connStart" else "netEnd"
+                    for conn_type in ["conn_start", "conn_end"]:
+                        net_type = "net_start" if conn_type == "conn_start" else "net_end"
                         if uuid in conn_item.get(conn_type, []):
                             if layer in conn_item.get(net_type, {}):
                                 node = conn_item[net_type][layer]
                                 if node > 0 and node not in zone_connections[layer][uuid]:
                                     zone_connections[layer][uuid].append(node)
                 else:
-                    if "netStart" in conn_item and layer in conn_item["netStart"]:
-                        node = conn_item["netStart"][layer]
+                    if "net_start" in conn_item and layer in conn_item["net_start"]:
+                        node = conn_item["net_start"][layer]
                         if node > 0 and node not in zone_connections[layer][uuid]:
                             zone_connections[layer][uuid].append(node)
 

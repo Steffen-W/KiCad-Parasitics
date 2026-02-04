@@ -145,63 +145,63 @@ def Get_PCB_Elements(board: pcbnew.BOARD, connect: pcbnew.CONNECTIVITY_DATA):
     ItemList = {}
 
     for track in board.GetTracks():
-        temp: dict[str, Any] = {"Layer": getLayer(track, PossibleLayer)}
+        temp: dict[str, Any] = {"layer": getLayer(track, PossibleLayer)}
         if type(track) is pcbnew.PCB_VIA:
             temp["type"] = "VIA"
-            temp["Position"] = ToMM(track.GetStart())
-            temp["Drill"] = ToMM(track.GetDrill())
-            temp["Width"] = ToMM(track.GetWidth())
-            temp["connStart"] = sorted(
+            temp["position"] = ToMM(track.GetStart())
+            temp["drill"] = ToMM(track.GetDrill())
+            temp["width"] = ToMM(track.GetWidth())
+            temp["conn_start"] = sorted(
                 getHashList(connect.GetConnectedPads(track))
                 + getHashList(connect.GetConnectedTracks(track))
             )
-            temp["Area"] = 0
+            temp["area"] = 0
         elif type(track) is pcbnew.PCB_TRACK:
             temp["type"] = "WIRE"
-            temp["Start"] = ToMM(track.GetStart())
-            temp["End"] = ToMM(track.GetEnd())
-            temp["Width"] = ToMM(track.GetWidth())
-            temp["Length"] = ToMM(track.GetLength())
-            temp["Area"] = temp["Width"] * temp["Length"]
+            temp["start"] = ToMM(track.GetStart())
+            temp["end"] = ToMM(track.GetEnd())
+            temp["width"] = ToMM(track.GetWidth())
+            temp["length"] = ToMM(track.GetLength())
+            temp["area"] = temp["width"] * temp["length"]
             if track.GetLength() == 0:
                 continue
-            temp["Layer"] = [track.GetLayer()]
-            temp["connStart"], temp["connEnd"] = getConnections(track, connect)
+            temp["layer"] = [track.GetLayer()]
+            temp["conn_start"], temp["conn_end"] = getConnections(track, connect)
         elif type(track) is pcbnew.PCB_ARC:
             temp["type"] = "WIRE"
-            temp["Start"] = ToMM(track.GetStart())
-            temp["End"] = ToMM(track.GetEnd())
-            temp["Radius"] = ToMM(track.GetRadius())
-            temp["Width"] = ToMM(track.GetWidth())
-            temp["Length"] = ToMM(track.GetLength())
-            temp["Area"] = temp["Width"] * temp["Length"]
+            temp["start"] = ToMM(track.GetStart())
+            temp["end"] = ToMM(track.GetEnd())
+            temp["radius"] = ToMM(track.GetRadius())
+            temp["width"] = ToMM(track.GetWidth())
+            temp["length"] = ToMM(track.GetLength())
+            temp["area"] = temp["width"] * temp["length"]
             if track.GetLength() == 0:
                 continue
-            temp["Layer"] = [track.GetLayer()]
-            temp["connStart"], temp["connEnd"] = getConnections(track, connect)
+            temp["layer"] = [track.GetLayer()]
+            temp["conn_start"], temp["conn_end"] = getConnections(track, connect)
         else:
             print("type", type(track), "is not considered!")
             continue
 
-        temp["Netname"] = track.GetNetname()
-        temp["NetCode"] = track.GetNetCode()
+        temp["net_name"] = track.GetNetname()
+        temp["net_code"] = track.GetNetCode()
         temp["id"] = getHash(track)
-        temp["IsSelected"] = track.IsSelected()
+        temp["is_selected"] = track.IsSelected()
         ItemList[temp["id"]] = temp
 
     for item in board.AllConnectedItems():
-        temp = {"Layer": getLayer(item, PossibleLayer)}
+        temp = {"layer": getLayer(item, PossibleLayer)}
         if type(item) is pcbnew.PAD:
             temp["type"] = "PAD"
-            temp["Shape"] = item.GetShape()
+            temp["shape"] = item.GetShape()
             # temp["PadAttr"] = Pad.ShowPadAttr()
             # temp["IsFlipped"] = Pad.IsFlipped()
-            temp["Position"] = ToMM(item.GetPosition())
-            temp["Size"] = ToMM(item.GetSize())
-            temp["Orientation"] = item.GetOrientation().AsDegrees()
-            temp["DrillSize"] = ToMM(item.GetDrillSize())
-            temp["Drill"] = temp["DrillSize"][0]
-            Layers = temp.get("Layer", [])
+            temp["position"] = ToMM(item.GetPosition())
+            temp["size"] = ToMM(item.GetSize())
+            temp["orientation"] = item.GetOrientation().AsDegrees()
+            temp["drill_size"] = ToMM(item.GetDrillSize())
+            temp["drill"] = temp["drill_size"][0]
+            Layers = temp.get("layer", [])
 
             if len(Layers):
                 try:
@@ -209,9 +209,9 @@ def Get_PCB_Elements(board: pcbnew.BOARD, connect: pcbnew.CONNECTIVITY_DATA):
                 except Exception:
                     poly_obj = item.GetEffectivePolygon(aLayer=Layers[0])
 
-                temp["Area"] = ToMM(ToMM(poly_obj.Area()))
+                temp["area"] = ToMM(ToMM(poly_obj.Area()))
             else:
-                temp["Area"] = 0
+                temp["area"] = 0
 
             temp["PadName"] = item.GetPadName()
             # temp["FootprintUUID"] = getHash(Pad.GetParent())
@@ -222,8 +222,8 @@ def Get_PCB_Elements(board: pcbnew.BOARD, connect: pcbnew.CONNECTIVITY_DATA):
             if "teardrop" in item.GetZoneName():  # skip teardrop zones
                 continue
             temp["type"] = "ZONE"
-            temp["Position"] = ToMM(item.GetPosition())
-            temp["Area"] = ToMM(ToMM(item.GetFilledArea()))
+            temp["position"] = ToMM(item.GetPosition())
+            temp["area"] = ToMM(ToMM(item.GetFilledArea()))
             temp["NumCorners"] = item.GetNumCorners()
             temp["ZoneName"] = item.GetZoneName()
         elif type(item) is pcbnew.PCB_TRACK:
@@ -237,11 +237,11 @@ def Get_PCB_Elements(board: pcbnew.BOARD, connect: pcbnew.CONNECTIVITY_DATA):
             print("type", type(item), "is not considered!")
             continue
 
-        temp["Netname"] = item.GetNetname()
-        temp["NetCode"] = item.GetNetCode()
+        temp["net_name"] = item.GetNetname()
+        temp["net_code"] = item.GetNetCode()
         temp["id"] = getHash(item)
-        temp["IsSelected"] = item.IsSelected()
-        temp["connStart"] = sorted(
+        temp["is_selected"] = item.IsSelected()
+        temp["conn_start"] = sorted(
             getHashList(connect.GetConnectedPads(item))
             + getHashList(connect.GetConnectedTracks(item))
         )
@@ -249,22 +249,22 @@ def Get_PCB_Elements(board: pcbnew.BOARD, connect: pcbnew.CONNECTIVITY_DATA):
 
     for uuid, d in list(ItemList.items()):
         if d["type"] == "ZONE":
-            zone_pos = d.get("Position", (0, 0))
-            for item in d["connStart"]:
+            zone_pos = d.get("position", (0, 0))
+            for item in d["conn_start"]:
                 if item not in ItemList:
                     continue
                 item_data = ItemList[item]
                 if item_data.get("type") == "WIRE":
                     # Add zone to the wire end that's closer
-                    start = item_data.get("Start", (0, 0))
-                    end = item_data.get("End", (0, 0))
+                    start = item_data.get("start", (0, 0))
+                    end = item_data.get("end", (0, 0))
                     dist_start = (start[0] - zone_pos[0]) ** 2 + (start[1] - zone_pos[1]) ** 2
                     dist_end = (end[0] - zone_pos[0]) ** 2 + (end[1] - zone_pos[1]) ** 2
-                    conn_key = "connStart" if dist_start <= dist_end else "connEnd"
+                    conn_key = "conn_start" if dist_start <= dist_end else "conn_end"
                     if uuid not in item_data.get(conn_key, []):
                         item_data.setdefault(conn_key, []).append(uuid)
                 else:
-                    if uuid not in item_data.get("connStart", []):
-                        item_data.setdefault("connStart", []).append(uuid)
+                    if uuid not in item_data.get("conn_start", []):
+                        item_data.setdefault("conn_start", []).append(uuid)
 
     return ItemList, BoardThickness

@@ -102,9 +102,9 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
                 invalid_wires = []
                 for uuid, d in data.items():
                     if d.get("type") == "WIRE":
-                        for layer in d.get("Layer", []):
-                            netStart = d.get("netStart", {}).get(layer, 0)
-                            netEnd = d.get("netEnd", {}).get(layer, 0)
+                        for layer in d.get("layer", []):
+                            netStart = d.get("net_start", {}).get(layer, 0)
+                            netEnd = d.get("net_end", {}).get(layer, 0)
                             if netStart == 0 or netEnd == 0:
                                 invalid_wires.append((uuid, layer, netStart, netEnd))
 
@@ -133,7 +133,7 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
             # get resistance
             ####################################################
 
-            Selected = [d for uuid, d in data.items() if d["IsSelected"]]
+            Selected = [d for uuid, d in data.items() if d["is_selected"]]
 
             if debug:
                 debug_print(f"[DEBUG] Found {len(Selected)} selected elements")
@@ -147,9 +147,9 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
             NetCode = None
             network_debug_text = None
             if len(Selected) == 2:
-                NetCode = Selected[0]["NetCode"]
+                NetCode = Selected[0]["net_code"]
 
-                if NetCode != Selected[1]["NetCode"]:
+                if NetCode != Selected[1]["net_code"]:
                     message = "The marked points are not in the same network."
             else:
                 message = "You have to mark exactly two elements."
@@ -161,12 +161,12 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
                 best_distance = float("inf")
                 best_conn = None
 
-                for layer1 in Selected[0].get("Layer", []):
-                    conn1 = Selected[0]["netStart"].get(layer1, 0)
+                for layer1 in Selected[0].get("layer", []):
+                    conn1 = Selected[0]["net_start"].get(layer1, 0)
                     if conn1 == 0:
                         continue
-                    for layer2 in Selected[1].get("Layer", []):
-                        conn2 = Selected[1]["netStart"].get(layer2, 0)
+                    for layer2 in Selected[1].get("layer", []):
+                        conn2 = Selected[1]["net_start"].get(layer2, 0)
                         if conn2 == 0:
                             continue
 
@@ -211,8 +211,8 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
                         )
                 else:
                     # Fallback to first layer
-                    conn1 = Selected[0]["netStart"][Selected[0]["Layer"][0]]
-                    conn2 = Selected[1]["netStart"][Selected[1]["Layer"][0]]
+                    conn1 = Selected[0]["net_start"][Selected[0]["layer"][0]]
+                    conn2 = Selected[1]["net_start"][Selected[1]["layer"][0]]
                     (
                         Resistance,
                         Distance,
@@ -393,12 +393,12 @@ if __name__ == "__main__":
     pprint(CuStack)
 
     # get resistance
-    Selected = [d for uuid, d in list(data.items()) if d["IsSelected"]]
+    Selected = [d for uuid, d in list(data.items()) if d["is_selected"]]
     if len(Selected) == 2:
-        conn1 = Selected[0]["netStart"][Selected[0]["Layer"][0]]
-        conn2 = Selected[1]["netStart"][Selected[1]["Layer"][0]]
-        NetCode = Selected[0]["NetCode"]
-        if not NetCode == Selected[1]["NetCode"]:
+        conn1 = Selected[0]["net_start"][Selected[0]["layer"][0]]
+        conn2 = Selected[1]["net_start"][Selected[1]["layer"][0]]
+        NetCode = Selected[0]["net_code"]
+        if not NetCode == Selected[1]["net_code"]:
             print("The marked points are not in the same network.")
 
         Resistance, Distance, short_path_RES, Area, network_info = Get_Parasitic(
