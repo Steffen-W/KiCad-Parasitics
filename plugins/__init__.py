@@ -1,18 +1,23 @@
-import pcbnew
 import os.path
-import wx
+import os
 import traceback
 from pathlib import Path
 import math
+import json
 
-try:
-    if not __name__ == "__main__":
-        from .Get_PCB_Elements import Get_PCB_Elements, SaveDictToFile
-        from .Connect_Nets import Connect_Nets
-        from .Get_PCB_Stackup import Get_PCB_Stackup_fun
-        from .Get_Parasitic import Get_Parasitic
-except Exception:
-    print(traceback.format_exc())
+import pcbnew
+import wx
+
+if __name__ == "__main__":
+    from Get_PCB_Elements import Get_PCB_Elements, SaveDictToFile
+    from Connect_Nets import Connect_Nets
+    from Get_PCB_Stackup import Get_PCB_Stackup_fun
+    from Get_Parasitic import Get_Parasitic, format_network_info
+else:
+    from .Get_PCB_Elements import Get_PCB_Elements, SaveDictToFile
+    from .Connect_Nets import Connect_Nets
+    from .Get_PCB_Stackup import Get_PCB_Stackup_fun
+    from .Get_Parasitic import Get_Parasitic, format_network_info
 
 
 class KiCadPluginParasitic(pcbnew.ActionPlugin):
@@ -139,16 +144,18 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
                     )
 
             message = ""
+            NetCode = None
+            network_debug_text = None
             if len(Selected) == 2:
                 NetCode = Selected[0]["NetCode"]
 
-                if not NetCode == Selected[1]["NetCode"]:
+                if NetCode != Selected[1]["NetCode"]:
                     message = "The marked points are not in the same network."
             else:
                 message = "You have to mark exactly two elements."
                 message += " Preferably pads or vias."
 
-            if message == "":
+            if message == "" and NetCode is not None:
                 # Try all layer combinations to find a valid path
                 best_result = None
                 best_distance = float("inf")
@@ -168,6 +175,9 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
                             Distance,
                             short_path_RES,
                             Area,
+                            network_info,
+                            graph,
+                            path,
                         ) = Get_Parasitic(
                             data,
                             CuStack,
@@ -185,14 +195,18 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
                                 Distance,
                                 short_path_RES,
                                 Area,
+                                network_info,
+                                graph,
+                                path,
                             )
                             best_conn = (conn1, conn2, layer1, layer2)
 
-                if best_result:
-                    Resistance, Distance, short_path_RES, Area = best_result
-                    if debug and best_conn:
+                if best_result and best_conn:
+                    Resistance, Distance, short_path_RES, Area, network_info, graph, path = best_result
+                    conn1, conn2 = best_conn[0], best_conn[1]
+                    if debug:
                         debug_print(
-                            f"[DEBUG] Best path: conn1={best_conn[0]}, conn2={best_conn[1]}, "
+                            f"[DEBUG] Best path: conn1={conn1}, conn2={conn2}, "
                             f"layers={best_conn[2]}/{best_conn[3]}, distance={Distance:.3f}mm"
                         )
                 else:
@@ -204,6 +218,9 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
                         Distance,
                         short_path_RES,
                         Area,
+                        network_info,
+                        graph,
+                        path,
                     ) = Get_Parasitic(
                         data,
                         CuStack,
@@ -213,6 +230,18 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
                         debug=debug,
                         debug_print=debug_print,
                     )
+
+                # Debug output of resistance network (only once for best result)
+                if debug and network_info:
+                    debug_print(f"Measuring resistance: n{conn1} <-> n{conn2}")
+                    debug_print(format_network_info(network_info, graph, path))
+                    network_json_file = os.path.join(self.plugin_path, "network_info.json")
+                    try:
+                        with open(network_json_file, "w", encoding="utf-8") as f:
+                            json.dump(network_info, f, indent=2)
+                        debug_print(f"[DEBUG] Network info saved to: {network_json_file}")
+                    except Exception as e:
+                        debug_print(f"[DEBUG] Failed to save network_info: {e}")
 
                 message += "\nShortest distance between the two points ≈ "
                 message += "{:.3f} mm".format(Distance)
@@ -259,12 +288,75 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
                             CuStack[layer]["thickness"] * 1000,
                         )
 
-            dlg = wx.MessageDialog(
-                None,
-                message,
-                "Analysis result",
-                wx.OK,
-            )
+                # Build network debug text for details dialog
+                if network_info:
+                    network_debug_text = f"Measuring resistance: n{conn1} <-> n{conn2}\n"
+                    network_debug_text += format_network_info(network_info, graph, path)
+
+            # Custom dialog with optional Details button
+            class ResultDialog(wx.Dialog):
+                def __init__(self, parent, message, debug_text=None):
+                    super().__init__(parent, title="Analysis result",
+                                     style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+                    self.debug_text = debug_text
+
+                    sizer = wx.BoxSizer(wx.VERTICAL)
+
+                    # Main message
+                    text = wx.StaticText(self, label=message)
+                    sizer.Add(text, 0, wx.ALL | wx.EXPAND, 10)
+
+                    # Button sizer
+                    btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
+                    ok_btn = wx.Button(self, wx.ID_OK, "OK")
+                    btn_sizer.Add(ok_btn, 0, wx.ALL, 5)
+
+                    if debug_text:
+                        details_btn = wx.Button(self, label="Details...")
+                        details_btn.Bind(wx.EVT_BUTTON, self.on_details)
+                        btn_sizer.Add(details_btn, 0, wx.ALL, 5)
+
+                    sizer.Add(btn_sizer, 0, wx.ALIGN_CENTER | wx.ALL, 5)
+                    self.SetSizerAndFit(sizer)
+                    self.SetMinSize(wx.Size(400, 150))
+
+                def on_details(self, _event):
+                    # Show network details in a simple text dialog
+                    detail_dlg = wx.Dialog(self, title="Network Details",
+                                           style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+                    sizer = wx.BoxSizer(wx.VERTICAL)
+
+                    # Monospace text control
+                    text_ctrl = wx.TextCtrl(detail_dlg, value=self.debug_text or "",
+                                            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.HSCROLL)
+                    font = wx.Font(10, wx.FONTFAMILY_TELETYPE, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
+                    text_ctrl.SetFont(font)
+
+                    # Calculate size based on content
+                    lines = (self.debug_text or "").split("\n")
+                    max_line_len = max((len(line) for line in lines), default=40)
+                    num_lines = len(lines)
+
+                    # Estimate character size with monospace font
+                    dc = wx.ClientDC(detail_dlg)
+                    dc.SetFont(font)
+                    char_width, char_height = dc.GetTextExtent("M")
+
+                    # Calculate needed size with padding
+                    width = min(max(max_line_len * char_width + 60, 500), 1000)
+                    height = min(max(num_lines * char_height + 100, 300), 800)
+
+                    sizer.Add(text_ctrl, 1, wx.ALL | wx.EXPAND, 10)
+
+                    close_btn = wx.Button(detail_dlg, wx.ID_OK, "Close")
+                    sizer.Add(close_btn, 0, wx.ALIGN_CENTER | wx.BOTTOM, 10)
+
+                    detail_dlg.SetSizer(sizer)
+                    detail_dlg.SetSize(wx.Size(width, height))
+                    detail_dlg.ShowModal()
+                    detail_dlg.Destroy()
+
+            dlg = ResultDialog(None, message, network_debug_text)
             dlg.ShowModal()
             dlg.Destroy()
 
@@ -287,20 +379,17 @@ if not __name__ == "__main__":
 
 if __name__ == "__main__":
     from ItemList import data, board_FileName
-    from Connect_Nets import Connect_Nets as Connect_Nets_fn
-    from Get_PCB_Stackup import Get_PCB_Stackup_fun as Get_Stackup
-    from Get_Parasitic import Get_Parasitic as Get_Parasitic_fn
     from pprint import pprint
 
     # Get PCB Elements
     ItemList = data
 
     # connect nets together
-    data = Connect_Nets_fn(ItemList)
+    data = Connect_Nets(ItemList)
     # pprint(data)
 
     # read PhysicalLayerStack from file
-    PhysicalLayerStack, CuStack = Get_Stackup(ProjectPath=board_FileName)
+    PhysicalLayerStack, CuStack = Get_PCB_Stackup_fun(ProjectPath=board_FileName)
     pprint(CuStack)
 
     # get resistance
@@ -312,8 +401,8 @@ if __name__ == "__main__":
         if not NetCode == Selected[1]["NetCode"]:
             print("The marked points are not in the same network.")
 
-        Resistance, Distance, short_path_RES, Area = Get_Parasitic_fn(
-            data, CuStack, conn1, conn2, NetCode
+        Resistance, Distance, short_path_RES, Area, network_info = Get_Parasitic(
+            data, CuStack, conn1, conn2, NetCode, debug=1
         )
         print(f"Distance {Distance} mm")
         print(f"Resistance {Resistance} mOhm")

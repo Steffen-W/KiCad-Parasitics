@@ -38,16 +38,16 @@ def parse_sexp(sexp):
         elif term == "s":
             out.append(value)
         else:
-            raise NotImplementedError("Error: %r" % (term, value))
+            raise NotImplementedError(f"Error: {term!r}, {value!r}")
     assert not stack, "Trouble with nesting of brackets"
     return out[0]
 
 
 def print_sexp(exp):
     out = ""
-    if type(exp) == type([]):
+    if isinstance(exp, list):
         out += "(" + " ".join(print_sexp(x) for x in exp) + ")"
-    elif type(exp) == type("") and re.search(r"[\s()]", exp):
+    elif isinstance(exp, str) and re.search(r"[\s()]", exp):
         out += '"%s"' % repr(exp)[1:-1].replace('"', '"')
     else:
         out += "%s" % exp
@@ -55,7 +55,6 @@ def print_sexp(exp):
 
 
 if __name__ == "__main__":
-    from pprint import pprint
 
     sexp = """(sym_lib_table
   (version 7)
@@ -69,6 +68,6 @@ if __name__ == "__main__":
     parsed = parse_sexp(sexp)
     # pprint(parsed)
     for line in parsed:
-        if type(line) == list and line[0] == "lib":
+        if isinstance(line, list) and line[0] == "lib":
             for item in line:
                 print(item)

@@ -1,5 +1,5 @@
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle, Ellipse
+from matplotlib.patches import Rectangle, Ellipse, Circle
 from matplotlib.transforms import Affine2D
 import numpy as np
 
@@ -9,7 +9,6 @@ def Plot_PCB(data):
     axes.set_aspect(1)
     axes.invert_yaxis()
 
-    shape = {0: "Kreis", 1: "Oval", 2: "Rechteck"}
 
     Color = {0: "red", 1: "green", 2: "orange", 3: "cyan", 4: "pink", 31: "blue"}
     for i in range(0, 32):
@@ -51,13 +50,13 @@ def Plot_PCB(data):
 
     for uuid, d in list(data.items()):
         if d["type"] == "VIA":
-            circ = plt.Circle(d["Position"], d["Width"] / 2, color="grey", alpha=0.5)
+            circ = Circle(d["Position"], d["Width"] / 2, color="grey", alpha=0.5)
             axes.add_artist(circ)
             if "Drill" in d:
-                axes.add_artist(plt.Circle(d["Position"], d["Drill"] / 2, color="w"))
+                axes.add_artist(Circle(d["Position"], d["Drill"] / 2, color="w"))
             # plt.text(*d["Position"], str(data[uuid]["netStart"]))
-            for l in d["Layer"]:
-                NameNetInPlot(uuid, l)
+            for layer in d["Layer"]:
+                NameNetInPlot(uuid, layer)
 
     def plotwire(Start, End, Width, layer, uuid):
         plt.arrow(
@@ -71,8 +70,8 @@ def Plot_PCB(data):
             color=Color[layer],
             alpha=0.5,
         )
-        axes.add_artist(plt.Circle(Start, Width / 2, color=Color[layer], alpha=0.25))
-        axes.add_artist(plt.Circle(End, Width / 2, color=Color[layer], alpha=0.25))
+        axes.add_artist(Circle(Start, Width / 2, color=Color[layer], alpha=0.25))
+        axes.add_artist(Circle(End, Width / 2, color=Color[layer], alpha=0.25))
         NameNetInPlot(uuid, layer, netStart=True)
         NameNetInPlot(uuid, layer, netStart=False)
 
@@ -93,7 +92,7 @@ def Plot_PCB(data):
                 )
                 axes.add_patch(ellip)
             else:
-                rec = plt.Rectangle(
+                rec = Rectangle(
                     np.array(d["Position"]) - np.array(d["Size"]) / 2,
                     width=d["Size"][0],
                     height=d["Size"][1],

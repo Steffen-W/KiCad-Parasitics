@@ -3,24 +3,20 @@ import os
 import math
 import traceback
 
-
-try:
-    if __name__ == "__main__":
-        from Get_Distance import (
-            find_shortest_path,
-            get_graph_from_edges,
-            find_all_reachable_nodes,
-        )
-        import ngspyce
-    else:
-        from .Get_Distance import (
-            find_shortest_path,
-            get_graph_from_edges,
-            find_all_reachable_nodes,
-        )
-        from . import ngspyce
-except Exception:
-    print(traceback.format_exc())
+if __name__ == "__main__":
+    from Get_Distance import (
+        find_shortest_path,
+        get_graph_from_edges,
+        find_all_reachable_nodes,
+    )
+    import ngspyce
+else:
+    from .Get_Distance import (
+        find_shortest_path,
+        get_graph_from_edges,
+        find_all_reachable_nodes,
+    )
+    from . import ngspyce
 
 
 def round_n(n, decimals=0):
@@ -43,7 +39,7 @@ def RunSimulation(resistors, conn1, conn2):
             f.write(entry)
 
         f.write("v1 {} 0 1\n".format(conn1))
-        f.write("R{} 0 {} {}\n".format(i + 2, conn2, Rshunt))
+        f.write("R{} 0 {} {}\n".format(len(resistors) + 1, conn2, Rshunt))
         f.write(".end")
 
     ngspyce.source(filename)
@@ -93,6 +89,170 @@ def Get_shortest_path_RES(path, resistors):
     return RES
 
 
+def find_all_paths_bfs(graph, start, end, max_depth=10):
+    """Find all paths from start to end using BFS, up to max_depth."""
+    from collections import deque
+    if start not in graph or end not in graph:
+        return []
+    all_paths = []
+    queue = deque([(start, [start])])
+    while queue:
+        node, current_path = queue.popleft()
+        if len(current_path) > max_depth:
+            continue
+        if node == end:
+            all_paths.append(current_path)
+            continue
+        for neighbor in graph[node]:
+            if neighbor not in current_path:
+                queue.append((neighbor, current_path + [neighbor]))
+    return all_paths
+
+
+def render_network_ascii(graph, path, network_info):
+    """Render network path with parallel branches as ASCII."""
+    if len(path) < 2:
+        return "Path too short"
+
+    res_lookup = {}
+    for info in network_info:
+        n1, n2 = info["nodes"]
+        res_lookup[(min(n1, n2), max(n1, n2))] = info
+
+    def get_res(a, b):
+        key = (min(a, b), max(a, b))
+        return res_lookup[key]["resistance"] if key in res_lookup else 0
+
+    def get_type(a, b):
+        key = (min(a, b), max(a, b))
+        return res_lookup[key]["type"][0] if key in res_lookup else "?"
+
+    def path_res(p):
+        return sum(get_res(p[i], p[i+1]) for i in range(len(p)-1))
+
+    def fmt(p):
+        return "→".join(f"n{n}" for n in p)
+
+    # Find all paths
+    all_paths = find_all_paths_bfs(graph, path[0], path[-1], max_depth=len(path) + 4)
+    all_paths.sort(key=path_res)
+
+    # Common prefix length
+    plen = 0
+    for i in range(min(len(p) for p in all_paths)):
+        if len(set(p[i] for p in all_paths)) == 1:
+            plen = i + 1
+        else:
+            break
+
+    # Common suffix length
+    slen = 0
+    for i in range(1, min(len(p) for p in all_paths) + 1):
+        if len(set(p[-i] for p in all_paths)) == 1:
+            slen = i
+        else:
+            break
+
+    lines = []
+
+    # Prefix (series)
+    for i in range(plen - 1):
+        a, b = all_paths[0][i], all_paths[0][i + 1]
+        lines.append(f"n{a}")
+        lines.append(f" │ {get_type(a, b)} {get_res(a, b)*1000:.2f}mΩ")
+
+    # Parallel part
+    lines.append(f"n{all_paths[0][plen - 1]}")
+
+    mids = [(p[plen - 1: len(p) - slen + 1], path_res(p[plen - 1: len(p) - slen + 1]))
+            for p in all_paths]
+    mids.sort(key=lambda x: (x[0], x[1]))  # Sort by path then resistance
+
+    prev = None
+    for mid, r in mids:
+        if prev:
+            # Find common prefix with previous
+            common = 0
+            for i in range(min(len(mid), len(prev))):
+                if mid[i] == prev[i]:
+                    common = i + 1
+                else:
+                    break
+            if common > 1:
+                indent = "   " * (common - 1)
+                diff = mid[common:]
+                lines.append(f" │{indent}└─ {fmt(diff)} ({r*1000:.2f}mΩ)")
+            else:
+                lines.append(f" ├─ {fmt(mid[1:])} ({r*1000:.2f}mΩ)")
+        else:
+            lines.append(f" ├─ {fmt(mid[1:])} ({r*1000:.2f}mΩ)")
+        prev = mid
+
+    # Parallel resistance
+    resistances = [r for _, r in mids]
+    if all(r > 0 for r in resistances):
+        r_par = 1 / sum(1/r for r in resistances)
+        lines.append(f" └─ R_parallel = {r_par*1000:.2f}mΩ")
+
+    lines.append(f"n{all_paths[0][-slen]}")
+
+    # Suffix (series)
+    for i in range(slen - 1):
+        a, b = all_paths[0][-slen + i], all_paths[0][-slen + i + 1]
+        lines.append(f" │ {get_type(a, b)} {get_res(a, b)*1000:.2f}mΩ")
+        lines.append(f"n{b}")
+
+    return "\n".join(lines)
+
+
+def format_network_info(network_info, graph=None, path=None):
+    """Format network info as human-readable string for debugging.
+
+    Args:
+        network_info: List of dicts with resistance element info
+        graph: Optional adjacency dict for path visualization
+        path: Optional list of nodes for path visualization
+    """
+    lines = ["RESISTANCE NETWORK", "-" * 40]
+
+    # Normalize nodes (lower first) and sort by (n1, n2)
+    sorted_info = sorted(
+        network_info,
+        key=lambda x: (min(x["nodes"]), max(x["nodes"]))
+    )
+
+    for item in sorted_info:
+        n1, n2 = sorted(item["nodes"])  # lower node first
+        t = item["type"]
+        r = item["resistance"]
+
+        if t == "WIRE":
+            lines.append(
+                f"WIRE  n{n1}--n{n2}  R={r*1000:.3f}mΩ  "
+                f"L={item['length']:.3f}mm W={item['width']:.3f}mm {item['layer_name']}"
+            )
+        elif t == "VIA":
+            lines.append(
+                f"VIA   n{n1}--n{n2}  R={r*1000:.3f}mΩ  "
+                f"D={item['drill']:.2f}mm {item['layer1_name']}<->{item['layer2_name']}"
+            )
+        elif t == "ZONE":
+            lines.append(
+                f"ZONE  n{n1}--n{n2}  R={r*1000:.3f}mΩ  {item['layer_name']}"
+            )
+
+    lines.append(f"Total: {len(network_info)} elements")
+
+    # Add ASCII tree visualization if path provided
+    if graph and path and len(path) >= 2:
+        lines.append("")
+        lines.append("PATH VISUALIZATION (start → end):")
+        lines.append("-" * 40)
+        lines.append(render_network_ascii(graph, path, network_info))
+
+    return "\n".join(lines)
+
+
 def Get_Parasitic(data, CuStack, conn1, conn2, netcode, debug=0, debug_print=None):
     """
     Calculate parasitic resistance and path between two connection points.
@@ -106,15 +266,11 @@ def Get_Parasitic(data, CuStack, conn1, conn2, netcode, debug=0, debug_print=Non
         debug: Debug level (0=off, 1=on)
         debug_print: Optional debug print function
     """
-    # No-op debug print when debug is disabled
-    if debug and debug_print is None:
-        debug_print = print
-    elif not debug:
-
-        def debug_print(msg):
-            return None
+    if debug_print is None:
+        debug_print = print if debug else lambda _: None
 
     resistors = []
+    network_info = []  # Detailed info for debugging/analysis
     coordinates = {}
     Area = {layer_idx: 0 for layer_idx in range(32)}
 
@@ -165,6 +321,19 @@ def Get_Parasitic(data, CuStack, conn1, conn2, netcode, debug=0, debug_print=Non
                         if resistor < 0:
                             raise ValueError("Error in resistance calculation!")
                         resistors.append([node1, node2, resistor, distance])
+                        network_info.append({
+                            "type": "VIA",
+                            "nodes": (node1, node2),
+                            "resistance": resistor,
+                            "length": distance,
+                            "drill": d["Drill"],
+                            "layer1": Layer1,
+                            "layer2": Layer2,
+                            "layer1_name": CuStack[Layer1]["name"],
+                            "layer2_name": CuStack[Layer2]["name"],
+                            "position": d["Position"],
+                            "cu_thickness": thickness,
+                        })
 
         else:
             Layer = d["Layer"][0]
@@ -190,6 +359,18 @@ def Get_Parasitic(data, CuStack, conn1, conn2, netcode, debug=0, debug_print=Non
                 if resistor < 0:
                     raise ValueError("Error in resistance calculation!")
                 resistors.append([netStart, netEnd, resistor, d["Length"]])
+                network_info.append({
+                    "type": "WIRE",
+                    "nodes": (netStart, netEnd),
+                    "resistance": resistor,
+                    "length": d["Length"],
+                    "width": d["Width"],
+                    "layer": Layer,
+                    "layer_name": CuStack[Layer]["name"],
+                    "start": d["Start"],
+                    "end": d["End"],
+                    "cu_thickness": thickness,
+                })
 
                 coordinates[netStart] = (
                     d["Start"][0],
@@ -253,8 +434,9 @@ def Get_Parasitic(data, CuStack, conn1, conn2, netcode, debug=0, debug_print=Non
                             zone_connections[layer][uuid].append(node)
 
     # Connect zone nodes with low resistance
-    zone_resistance = 1  # mOhm
+    zone_resistance = 0.001  # 1 mOhm
     for layer, zones in zone_connections.items():
+        layer_name = CuStack[layer]["name"] if layer in CuStack else f"Layer_{layer}"
         for _, nodes in zones.items():
             for i, node1 in enumerate(nodes):
                 for node2 in nodes[i + 1 :]:
@@ -266,6 +448,14 @@ def Get_Parasitic(data, CuStack, conn1, conn2, netcode, debug=0, debug_print=Non
                             (c1[0] - c2[0]) ** 2 + (c1[1] - c2[1]) ** 2
                         )
                     resistors.append([node1, node2, zone_resistance, zone_distance])
+                    network_info.append({
+                        "type": "ZONE",
+                        "nodes": (node1, node2),
+                        "resistance": zone_resistance,
+                        "length": zone_distance,
+                        "layer": layer,
+                        "layer_name": layer_name,
+                    })
 
     for res in resistors:
         if res[2] <= 0:
@@ -275,6 +465,7 @@ def Get_Parasitic(data, CuStack, conn1, conn2, netcode, debug=0, debug_print=Non
     edges = [(i[0], i[1], i[3]) for i in resistors]
     graph = get_graph_from_edges(edges)
 
+    path = []
     try:
         Distance, path = find_shortest_path(graph, conn1, conn2)
         short_path_RES = Get_shortest_path_RES(path, resistors)
@@ -298,4 +489,4 @@ def Get_Parasitic(data, CuStack, conn1, conn2, netcode, debug=0, debug_print=Non
         print(traceback.format_exc())
         print("ERROR in RunSimulation")
 
-    return Resistance, Distance, short_path_RES, Area_reduc
+    return Resistance, Distance, short_path_RES, Area_reduc, network_info, graph, path

@@ -1,9 +1,10 @@
 from os.path import exists
+from pathlib import Path
 
-try:
-    from .s_expression_parse import parse_sexp
-except:
+if __name__ == "__main__":
     from s_expression_parse import parse_sexp
+else:
+    from .s_expression_parse import parse_sexp
 
 import re
 
@@ -35,21 +36,21 @@ def extract_layer_from_string(input_string):  # kicad >=9.0
 
 
 def search_recursive(line: list, entry: str, all=False):
-    if type(line[0]) == str and line[0] == entry:
+    if isinstance(line[0], str) and line[0] == entry:
         if all:
             return line
         else:
             return line[1]
 
     for e in line:
-        if type(e) == list:
+        if isinstance(e, list):
             res = search_recursive(line=e, entry=entry, all=all)
             if res is not None:
                 return res
     return None
 
 
-def Get_PCB_Stackup_fun(ProjectPath="./test.kicad_pcb", new_v9=True, board_thickness=None):
+def Get_PCB_Stackup_fun(ProjectPath: str | Path = "./test.kicad_pcb", new_v9=True, board_thickness=None):
     def readFile2var(path):
         if not exists(path):
             return None
@@ -104,7 +105,7 @@ def Get_PCB_Stackup_fun(ProjectPath="./test.kicad_pcb", new_v9=True, board_thick
                     }
                     if Layer["thickness"] <= 0:
                         raise Exception("Problematic layer thickness detected")
-    except:
+    except Exception:
         print("ERROR: Reading the CuStack")
 
     if not CuStack:
@@ -112,7 +113,7 @@ def Get_PCB_Stackup_fun(ProjectPath="./test.kicad_pcb", new_v9=True, board_thick
         if layers:
             cu_layers = []
             for layer in layers:
-                if type(layer) == list and "signal" in layer:
+                if isinstance(layer, list) and "signal" in layer:
                     layer_name = layer[1]
                     extract_fn = extract_layer_from_string if new_v9 else extract_layer_from_string_old
                     cu_layer = extract_fn(layer_name)

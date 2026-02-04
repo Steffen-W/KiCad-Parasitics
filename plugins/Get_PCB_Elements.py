@@ -1,6 +1,6 @@
 import numpy as np
 import pcbnew
-
+from typing import Any
 
 ToMM = pcbnew.ToMM
 
@@ -32,7 +32,9 @@ def IsPointInPolygon(point_, polygon_):
                 if point[0] <= max(p1x, p2x):
                     if p1y != p2y:
                         x_intersect = (point[1] - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
-                    if p1x == p2x or point[0] <= x_intersect:
+                        if p1x == p2x or point[0] <= x_intersect:
+                            inside = not inside
+                    elif p1x == p2x:
                         inside = not inside
         p1x, p1y = p2x, p2y
 
@@ -50,7 +52,7 @@ def getHashList(objlist):
 def getPolygon(obj: pcbnew.PAD):
     try:
         poly_obj = obj.GetEffectivePolygon()
-    except:
+    except Exception:
         poly_obj = obj.GetEffectivePolygon(aLayer=0)  # TODO correct layer
     Polygon = [ToMM(poly_obj.CVertex(p)) for p in range(poly_obj.FullPointCount())]
     return Polygon
@@ -143,7 +145,7 @@ def Get_PCB_Elements(board: pcbnew.BOARD, connect: pcbnew.CONNECTIVITY_DATA):
     ItemList = {}
 
     for track in board.GetTracks():
-        temp = {"Layer": getLayer(track, PossibleLayer)}
+        temp: dict[str, Any] = {"Layer": getLayer(track, PossibleLayer)}
         if type(track) is pcbnew.PCB_VIA:
             temp["type"] = "VIA"
             temp["Position"] = ToMM(track.GetStart())
@@ -204,7 +206,7 @@ def Get_PCB_Elements(board: pcbnew.BOARD, connect: pcbnew.CONNECTIVITY_DATA):
             if len(Layers):
                 try:
                     poly_obj = item.GetEffectivePolygon()
-                except:
+                except Exception:
                     poly_obj = item.GetEffectivePolygon(aLayer=Layers[0])
 
                 temp["Area"] = ToMM(ToMM(poly_obj.Area()))
