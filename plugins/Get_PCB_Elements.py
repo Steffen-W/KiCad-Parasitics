@@ -217,8 +217,7 @@ def Get_PCB_Elements(board: pcbnew.BOARD, connect: pcbnew.CONNECTIVITY_DATA):
             #     temp["FootprintReference"] = Pad.GetParent().GetReference()
 
         elif type(item) is pcbnew.ZONE:
-            # pcbnew.ZONE().GetZoneName
-            if "teardrop" in item.GetZoneName():
+            if "teardrop" in item.GetZoneName():  # skip teardrop zones
                 continue
             temp["type"] = "ZONE"
             temp["Position"] = ToMM(item.GetPosition())
@@ -246,10 +245,24 @@ def Get_PCB_Elements(board: pcbnew.BOARD, connect: pcbnew.CONNECTIVITY_DATA):
         )
         ItemList[temp["id"]] = temp
 
-    for uuid, d in list(ItemList.items()):  # TODO: WIRES still need to be considered
+    for uuid, d in list(ItemList.items()):
         if d["type"] == "ZONE":
+            zone_pos = d.get("Position", (0, 0))
             for item in d["connStart"]:
-                if not "connEND" in ItemList[item]:
-                    ItemList[item]["connStart"].append(uuid)
+                if item not in ItemList:
+                    continue
+                item_data = ItemList[item]
+                if item_data.get("type") == "WIRE":
+                    # Add zone to the wire end that's closer
+                    start = item_data.get("Start", (0, 0))
+                    end = item_data.get("End", (0, 0))
+                    dist_start = (start[0] - zone_pos[0]) ** 2 + (start[1] - zone_pos[1]) ** 2
+                    dist_end = (end[0] - zone_pos[0]) ** 2 + (end[1] - zone_pos[1]) ** 2
+                    conn_key = "connStart" if dist_start <= dist_end else "connEnd"
+                    if uuid not in item_data.get(conn_key, []):
+                        item_data.setdefault(conn_key, []).append(uuid)
+                else:
+                    if uuid not in item_data.get("connStart", []):
+                        item_data.setdefault("connStart", []).append(uuid)
 
-    return ItemList
+    return ItemList, BoardThickness

@@ -20,7 +20,7 @@ def dijkstra(graph, start_node):
 
 
 def find_all_reachable_nodes(graph, start_node):
-    """Find all nodes reachable from start_node using BFS"""
+    """Find all nodes reachable from start_node using BFS."""
     if start_node not in graph:
         return set()
     visited = set()
@@ -34,22 +34,46 @@ def find_all_reachable_nodes(graph, start_node):
                 queue.append(neighbor)
     return visited
 
+
 def find_shortest_path(graph, start_node, end_node):
+    """
+    Find the shortest path between two nodes in a weighted graph.
+
+    Args:
+        graph: Dictionary mapping nodes to their neighbors and edge weights
+        start_node: Starting node ID
+        end_node: Destination node ID
+
+    Returns:
+        Tuple of (distance, path) where path is a list of nodes
+
+    Raises:
+        ValueError: If start/end node not in graph or no path exists
+    """
     if start_node not in graph:
-        raise ValueError(f"Start node {start_node} not in graph. Available nodes: {sorted(graph.keys())}")
+        raise ValueError(
+            f"Start node {start_node} not in graph. "
+            f"Available nodes: {sorted(graph.keys())[:20]}..."
+        )
     if end_node not in graph:
-        raise ValueError(f"End node {end_node} not in graph. Available nodes: {sorted(graph.keys())}")
-    
-    distance, predecessor_from_start1 = dijkstra(graph, start_node)
+        raise ValueError(
+            f"End node {end_node} not in graph. "
+            f"Available nodes: {sorted(graph.keys())[:20]}..."
+        )
+
+    distance, predecessor = dijkstra(graph, start_node)
+
     if end_node not in distance or math.isinf(distance[end_node]):
-        # Find all reachable nodes from start_node for debugging
         reachable = find_all_reachable_nodes(graph, start_node)
-        raise ValueError(f"No path found from {start_node} to {end_node}. "
-                        f"Reachable from {start_node}: {len(reachable)} nodes. "
-                        f"End node {end_node} is {'reachable' if end_node in reachable else 'NOT reachable'}.")
+        raise ValueError(
+            f"No path found from {start_node} to {end_node}. "
+            f"Reachable from start: {len(reachable)} nodes. "
+            f"End node is {'reachable' if end_node in reachable else 'NOT reachable'}."
+        )
+
     path = [end_node]
     while path[-1] != start_node:
-        path.append(predecessor_from_start1[path[-1]])
+        path.append(predecessor[path[-1]])
     return distance[end_node], path[::-1]
 
 
@@ -66,7 +90,7 @@ def get_graph_from_edges(edges: list):
     edges = [(k[0], k[1], res[k]) for k in res.keys()]
 
     # Converting to a graph representation
-    graph = {node: {} for node in nodes}
+    graph: dict[int, dict[int, float]] = {node: {} for node in nodes}
     for edge in edges:
         graph[edge[0]][edge[1]] = edge[2]
     return graph
@@ -86,11 +110,11 @@ if __name__ == "__main__":
         (5, 3, 2),
     ]
 
-    graph = get_graph_from_edges()
-    distance, path = find_shortest_path(graph, start_node, end_node)
-    if path:
+    graph: dict[int, dict[int, float]] = get_graph_from_edges(edges)
+    try:
+        distance, path = find_shortest_path(graph, start_node, end_node)
         print(
             f"Shortest path {str(distance)} from {str(start_node)} to {str(end_node)}: {str(path)}"
         )
-    else:
-        print(f"No path found from {str(start_node)} to {str(end_node)}")
+    except ValueError as e:
+        print(f"Error: {e}")

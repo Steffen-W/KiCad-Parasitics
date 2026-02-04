@@ -44,12 +44,12 @@ def search_recursive(line: list, entry: str, all=False):
     for e in line:
         if type(e) == list:
             res = search_recursive(line=e, entry=entry, all=all)
-            if not res == None:
+            if res is not None:
                 return res
     return None
 
 
-def Get_PCB_Stackup_fun(ProjectPath="./test.kicad_pcb", new_v9=True):
+def Get_PCB_Stackup_fun(ProjectPath="./test.kicad_pcb", new_v9=True, board_thickness=None):
     def readFile2var(path):
         if not exists(path):
             return None
@@ -60,6 +60,7 @@ def Get_PCB_Stackup_fun(ProjectPath="./test.kicad_pcb", new_v9=True):
 
     PhysicalLayerStack = []
     CuStack = {}
+    parsed = None
     try:
         if exists(ProjectPath):
             txt = readFile2var(ProjectPath)
@@ -82,7 +83,7 @@ def Get_PCB_Stackup_fun(ProjectPath="./test.kicad_pcb", new_v9=True):
                     tmp["epsilon_r"] = search_recursive(layer, "epsilon_r")
                     tmp["type"] = search_recursive(layer, "type")
 
-                    if not tmp["thickness"] == None:
+                    if tmp["thickness"] is not None:
                         if new_v9:
                             tmp["cu_layer"] = extract_layer_from_string(tmp["layer"])
                         else:
@@ -95,7 +96,7 @@ def Get_PCB_Stackup_fun(ProjectPath="./test.kicad_pcb", new_v9=True):
                 break
 
             for Layer in PhysicalLayerStack:
-                if not Layer["cu_layer"] == None:
+                if Layer["cu_layer"] is not None:
                     CuStack[Layer["cu_layer"]] = {
                         "thickness": Layer["thickness"],
                         "name": Layer["layer"],
@@ -107,14 +108,35 @@ def Get_PCB_Stackup_fun(ProjectPath="./test.kicad_pcb", new_v9=True):
         print("ERROR: Reading the CuStack")
 
     if not CuStack:
-        layers = search_recursive(parsed, "layers", all=True)
-        for layer in layers:
-            if type(layer) == list and "signal" in layer:
-                CuStack[layer[0]] = {
+        layers = search_recursive(parsed, "layers", all=True) if parsed else None
+        if layers:
+            cu_layers = []
+            for layer in layers:
+                if type(layer) == list and "signal" in layer:
+                    layer_name = layer[1]
+                    extract_fn = extract_layer_from_string if new_v9 else extract_layer_from_string_old
+                    cu_layer = extract_fn(layer_name)
+                    if cu_layer is not None:
+                        cu_layers.append((cu_layer, layer_name))
+
+            cu_layers.sort(key=lambda x: x[0])
+            n = len(cu_layers)
+            total_height = board_thickness if board_thickness else 1.6
+
+            for i, (cu_layer, layer_name) in enumerate(cu_layers):
+                CuStack[cu_layer] = {
                     "thickness": 0.035,
-                    "name": layer[1],
-                    "abs_height": float(layer[0]) / 20,  # arbitrary assumption
+                    "name": layer_name,
+                    "abs_height": i * total_height / max(1, n - 1) if n > 1 else 0.0,
                 }
-        print("estimated CuStack", CuStack)
+            if CuStack:
+                print("WARNING: No stackup found, estimated CuStack:", CuStack)
+
+    if not CuStack:
+        total = board_thickness if board_thickness else 1.6
+        print(f"WARNING: No layer info found. Using 2-layer default: {total}mm, 35µm copper")
+        b_cu = 2 if new_v9 else 31
+        CuStack[0] = {"thickness": 0.035, "name": "F.Cu", "abs_height": 0.0}
+        CuStack[b_cu] = {"thickness": 0.035, "name": "B.Cu", "abs_height": total}
 
     return PhysicalLayerStack, CuStack
