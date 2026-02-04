@@ -255,7 +255,7 @@ def Get_Parasitic(data, CuStack, conn1, conn2, netcode, debug=0, debug_print=Non
                             zone_connections[layer][uuid].append(node)
 
     # Connect zone nodes with low resistance
-    zone_resistance = 0.001  # mOhm
+    zone_resistance = 1  # mOhm
     for layer, zones in zone_connections.items():
         for _, nodes in zones.items():
             for i, node1 in enumerate(nodes):

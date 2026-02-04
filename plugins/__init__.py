@@ -226,10 +226,10 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
                 if not PhysicalLayerStack:
                     message += "\nNo Physical Stackup could be found!"
                 if short_path_RES > 0:
-                    message += "\nResistance (only short path) ≈ "
+                    message += "\nDC resistance (only short path) ≈ "
                     message += "{:.3f} mOhm".format(short_path_RES * 1000)
                 elif short_path_RES == 0:
-                    message += "\nResistance (only short path) ≈ "
+                    message += "\nDC resistance (only short path) ≈ "
                     message += "{:.3f} mOhm".format(short_path_RES * 1000)
                     message += "\nSurfaces of the zones are considered perfectly "
                     message += "conductive and short-circuit points. This is probably the case here."
@@ -239,7 +239,7 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
                         message += f"\n[DEBUG: Check {debug_log_file}]"
 
                 if not math.isinf(Resistance) and Resistance >= 0:
-                    message += "\nResistance between both points  ≈ "
+                    message += "\nDC resistance between both points ≈ "
                     message += "{:.3f} mOhm".format(Resistance * 1000)
                 elif Resistance < 0:
                     message += "\nERROR in Resistance Network calculation."
@@ -250,6 +250,8 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
                     message += "\nNo connection was found between the two marked points"
                     if debug:
                         message += f"\n[DEBUG: Check {debug_log_file}]"
+
+                message += "\n\nNote: AC resistance is typically much higher due to skin effect."
 
                 message += "\n"
                 if len(Area) > 0:
