@@ -22,6 +22,8 @@ Select exactly two elements (pads or vias) that belong to the **same net**. The 
 - **Stacked traces**: If multiple traces are placed on top of each other (e.g., on different layers connected by vias at both ends), they may be treated as parallel paths, resulting in a lower calculated resistance than the actual value.
 - **DC resistance only**: Only the DC resistance is calculated. The AC resistance (at higher frequencies) is typically much higher due to skin effect and proximity effect.
 
+<img width="969" height="872" alt="image" src="https://github.com/user-attachments/assets/b588b122-91ba-4538-b0dd-d0f684971774" />
+
 # Example
 
 First install Kicad-Parasitic from the Kicad "Plugin and Content Manager", then:
@@ -34,8 +36,7 @@ First install Kicad-Parasitic from the Kicad "Plugin and Content Manager", then:
 - zoom in to the front layer, close to the USB connector
 - select the two D- vias
 - press on the "parasitic" icon
-- ![grafik](https://user-images.githubusercontent.com/3403218/274056663-e2c870e7-c23e-4c59-855d-cbc0a39c98f6.png)
-
+![grafik](https://user-images.githubusercontent.com/3403218/274056663-e2c870e7-c23e-4c59-855d-cbc0a39c98f6.png)
 
 
 # Tested until now
