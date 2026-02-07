@@ -1,40 +1,47 @@
 import numpy as np
 import logging
-from .sharedspice import *
+from ctypes import c_char_p
+from .sharedspice import (
+    spice,
+    captured_output,
+    dvec_flags,
+    printfcn,
+    statfcn,
+    controlled_exit,
+    send_data,
+)
 
 __all__ = [
-    'cmd',
-    'circ',
-    'plots',
-    'vector_names',
-    'vectors',
-    'vector',
-    'try_float',
-    'model_parameters',
-    'device_state',
-    'alter_model',
-    'ac',
-    'dc',
-    'operating_point',
-    'linear_sweep',
-    'save',
-    'destroy',
-    'decibel',
-    'alter',
-    'alterparams',
-    'source',
-    'xspice_enabled'
+    "cmd",
+    "circ",
+    "plots",
+    "vector_names",
+    "vectors",
+    "vector",
+    "try_float",
+    "model_parameters",
+    "device_state",
+    "alter_model",
+    "ac",
+    "dc",
+    "operating_point",
+    "linear_sweep",
+    "save",
+    "destroy",
+    "decibel",
+    "alter",
+    "alterparams",
+    "source",
+    "xspice_enabled",
 ]
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.WARNING)
 
 
 def initialize():
-    spice.ngSpice_Init(printfcn, statfcn, controlled_exit, send_data, None, None,
-                       None)
+    spice.ngSpice_Init(printfcn, statfcn, controlled_exit, send_data, None, None, None)
     # Prevent paging output of commands (hangs)
-    cmd('set nomoremode')
+    cmd("set nomoremode")
 
 
 def cmd(command):
@@ -73,11 +80,10 @@ def cmd(command):
     """
     max_length = 1023
     if len(command) > max_length:
-        raise ValueError('Command length', len(command), 'greater than',
-                         max_length)
+        raise ValueError("Command length", len(command), "greater than", max_length)
     del captured_output[:]
-    spice.ngSpice_Command(command.encode('ascii'))
-    logger.debug('Command %s returned %s', command, captured_output)
+    spice.ngSpice_Command(command.encode("ascii"))
+    logger.debug("Command %s returned %s", command, captured_output)
     return captured_output
 
 
@@ -115,13 +121,13 @@ def circ(netlist_lines):
     0
 
     """
-    if issubclass(type(netlist_lines), str):
-        netlist_lines = netlist_lines.split('\n')
-    netlist_lines = [line.encode('ascii') for line in netlist_lines]
+    if isinstance(netlist_lines, str):
+        netlist_lines = netlist_lines.split("\n")
+    netlist_lines = [line.encode("ascii") for line in netlist_lines]
     # First line is ignored by the engine
-    netlist_lines.insert(0, b'* ngspyce-created netlist')
+    netlist_lines.insert(0, b"* ngspyce-created netlist")
     # Add netlist end
-    netlist_lines.append(b'.end')
+    netlist_lines.append(b".end")
     # Add list terminator
     netlist_lines.append(None)
     array = (c_char_p * len(netlist_lines))(*netlist_lines)
@@ -164,7 +170,7 @@ def plots():
     while True:
         if not plotlist[ii]:
             return ret
-        ret.append(plotlist[ii].decode('ascii'))
+        ret.append(plotlist[ii].decode("ascii"))
         ii += 1
 
 
@@ -203,13 +209,13 @@ def vector_names(plot=None):
     """
     names = []
     if plot is None:
-        plot = spice.ngSpice_CurPlot().decode('ascii')
-    veclist = spice.ngSpice_AllVecs(plot.encode('ascii'))
+        plot = spice.ngSpice_CurPlot().decode("ascii")
+    veclist = spice.ngSpice_AllVecs(plot.encode("ascii"))
     ii = 0
     while True:
         if not veclist[ii]:
             return names
-        names.append(veclist[ii].decode('ascii'))
+        names.append(veclist[ii].decode("ascii"))
         ii += 1
 
 
@@ -273,26 +279,26 @@ def vector(name, plot=None):
 
     """
     if plot is not None:
-        name = plot + '.' + name
-    vec = spice.ngGet_Vec_Info(name.encode('ascii'))
+        name = plot + "." + name
+    vec = spice.ngGet_Vec_Info(name.encode("ascii"))
     if not vec:
-        raise RuntimeError('Vector {} not found'.format(name))
+        raise RuntimeError("Vector {} not found".format(name))
     vec = vec[0]
     if vec.v_length == 0:
         array = np.array([])
     elif vec.v_flags & dvec_flags.vf_real:
         array = np.ctypeslib.as_array(vec.v_realdata, shape=(vec.v_length,))
     elif vec.v_flags & dvec_flags.vf_complex:
-        components = np.ctypeslib.as_array(vec.v_compdata,
-                                           shape=(vec.v_length, 2))
-        array = np.ndarray(shape=(vec.v_length,), dtype=np.complex128,
-                           buffer=components)
+        components = np.ctypeslib.as_array(vec.v_compdata, shape=(vec.v_length, 2))
+        array = np.ndarray(
+            shape=(vec.v_length,), dtype=np.complex128, buffer=components
+        )
     else:
-        raise RuntimeError('No valid data in vector')
-    logger.debug('Fetched vector {} type {}'.format(name, vec.v_type))
+        raise RuntimeError("No valid data in vector")
+    logger.debug("Fetched vector {} type {}".format(name, vec.v_type))
     array.setflags(write=False)
-    if name == 'frequency':
-        return array.real
+    if name == "frequency":
+        return np.real(array)
     return array
 
 
@@ -304,7 +310,7 @@ def try_float(s):
         return float(s)
     except ValueError:
         try:
-            return float(s.replace(',', '.'))
+            return float(s.replace(",", "."))
         except ValueError:
             return s
 
@@ -339,17 +345,16 @@ def model_parameters(device=None, model=None):
     """
     if device is None:
         if model is not None:
-            lines = cmd('showmod #' + model.lower())
+            lines = cmd("showmod #" + model.lower())
         else:
-            raise ValueError('Either device or model must be specified')
+            raise ValueError("Either device or model must be specified")
     else:
         if model is None:
-            lines = cmd('showmod ' + device.lower())
+            lines = cmd("showmod " + device.lower())
         else:
-            raise ValueError('Only specify one of device, model')
+            raise ValueError("Only specify one of device, model")
     ret = dict(description=lines.pop(0))
-    ret.update({parts[0]: try_float(parts[1])
-                for parts in map(str.split, lines)})
+    ret.update({parts[0]: try_float(parts[1]) for parts in map(str.split, lines)})
     return ret
 
 
@@ -378,11 +383,10 @@ def device_state(device):
     'model': 'R', 'resistance': 4.0, 'ac': 4.0, 'dtemp': 0.0, 'bv_max': 0.0,
     'noisy': 0.0}
     """
-    lines = cmd('show ' + device.lower())
+    lines = cmd("show " + device.lower())
 
     ret = dict(description=lines.pop(0))
-    ret.update({parts[0]: try_float(parts[1])
-                for parts in map(str.split, lines)})
+    ret.update({parts[0]: try_float(parts[1]) for parts in map(str.split, lines)})
     return ret
 
 
@@ -396,7 +400,7 @@ def alter_model(model, **params):
         Model card name
     """
     for k, v in params.items():
-        cmd('altermod {} {} = {:.6e}'.format(model, k, v))
+        cmd("altermod {} {} = {:.6e}".format(model, k, v))
 
 
 def ac(mode, npoints, fstart, fstop):
@@ -447,20 +451,19 @@ def ac(mode, npoints, fstart, fstop):
     .. image:: lowpass.png
 
     """
-    modes = ('dec', 'lin', 'oct')
+    modes = ("dec", "lin", "oct")
     if mode.lower() not in modes:
-        raise ValueError("'{}' is not a valid AC sweep "
-                         "mode: {}".format(mode, modes))
+        raise ValueError("'{}' is not a valid AC sweep mode: {}".format(mode, modes))
     if fstop < fstart:
-        raise ValueError('Start frequency', fstart,
-                         'greater than stop frequency', fstop)
-    cmd('ac {} {} {} {}'.format(mode, npoints, fstart, fstop))
+        raise ValueError(
+            "Start frequency", fstart, "greater than stop frequency", fstop
+        )
+    cmd("ac {} {} {} {}".format(mode, npoints, fstart, fstop))
     return vectors()
 
 
 def group(iterable, grouplength):
-    return zip(*(iterable[ii::grouplength]
-                 for ii in range(grouplength)))
+    return zip(*(iterable[ii::grouplength] for ii in range(grouplength)))
 
 
 def dc(*sweeps):
@@ -501,17 +504,14 @@ def dc(*sweeps):
     """
     # TODO: support more than two sweeps
     # TODO: implement other sweeps
-    cmd('dc ' + ' '.join(map(str, sweeps)))
-    sweepvalues = [linear_sweep(*sweep[1:])
-                   for sweep in group(sweeps, 4)]
+    cmd("dc " + " ".join(map(str, sweeps)))
+    sweepvalues = [linear_sweep(*sweep[1:]) for sweep in group(sweeps, 4)]
     sweeplengths = tuple(map(len, sweepvalues))
-    ret = {k: v.reshape(sweeplengths, order='F')
-           for k, v in vectors().items()}
+    ret = {k: v.reshape(sweeplengths, order="F") for k, v in vectors().items()}
     # Add vectors with swept sources/parameters
     for ii, (name, values) in enumerate(zip(sweeps[::4], sweepvalues)):
-        shape = [length if ii == jj else 1
-                 for jj, length in enumerate(sweeplengths)]
-        ret[name] = values.reshape(shape, order='F')
+        shape = [length if ii == jj else 1 for jj, length in enumerate(sweeplengths)]
+        ret[name] = values.reshape(shape, order="F")
     return ret
 
 
@@ -524,7 +524,7 @@ def operating_point():
     dict from str to ndarray
         Voltages and currents
     """
-    cmd('op')
+    cmd("op")
     return vectors()
 
 
@@ -539,10 +539,10 @@ def save(vector_name):
     vector_name : str
         Name of the vector
     """
-    cmd('save ' + vector_name)
+    cmd("save " + vector_name)
 
 
-def destroy(plotname='all'):
+def destroy(plotname="all"):
     """
     Erase plot from memory
 
@@ -551,12 +551,12 @@ def destroy(plotname='all'):
     plotname : str, optional
         Name of a plot. If omitted, erase all plots.
     """
-    cmd('destroy ' + plotname)
+    cmd("destroy " + plotname)
 
 
 def decibel(x):
-    '''Calculate 10*log(abs(x))'''
-    return 10. * np.log10(np.abs(x))
+    """Calculate 10*log(abs(x))"""
+    return 10.0 * np.log10(np.abs(x))
 
 
 def alter(device, **parameters):
@@ -578,14 +578,14 @@ def alter(device, **parameters):
         if not isinstance(v, (list, tuple)):
             v = str(v)
         else:
-            v = '[ ' + ' '.join(v) + ' ]'
-        cmd('alter {} {} = {}'.format(device.lower(), k, v))
+            v = "[ " + " ".join(v) + " ]"
+        cmd("alter {} {} = {}".format(device.lower(), k, v))
 
 
 def alterparams(**kwargs):
     for k, v in kwargs.items():
-        cmd('alterparam {} = {}'.format(k, v))
-    cmd('reset')
+        cmd("alterparam {} = {}".format(k, v))
+    cmd("reset")
 
 
 def linear_sweep(start, stop, step):
@@ -606,13 +606,13 @@ def linear_sweep(start, stop, step):
 
     """
     if (start > stop and step > 0) or (start < stop and step < 0):
-        raise ValueError("Can't sweep from", start, 'to', stop, 'with step',
-                         step)
+        raise ValueError("Can't sweep from", start, "to", stop, "with step", step)
     ret = []
     nextval = start
     while True:
         if np.sign(step) * nextval - np.sign(step) * stop >= (
-                np.finfo(float).eps * 1e3):
+            np.finfo(float).eps * 1e3
+        ):
             return np.array(ret)
         ret.append(nextval)
         nextval = nextval + step
@@ -642,7 +642,7 @@ def xspice_enabled():
     -------
     bool
     """
-    return '** XSPICE extensions included' in cmd('version -f')
+    return "** XSPICE extensions included" in cmd("version -f")
 
 
 initialize()

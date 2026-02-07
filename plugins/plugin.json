@@ -10,18 +10,18 @@
   "actions": [
     {
       "identifier": "Parasitics-action",
-      "name": "Parasitics Action",
+      "name": "Parasitics (IPC)",
       "description": "Plugin to analyze the wires in the PCB editor.",
       "show-button": true,
       "scopes": [
         "pcb"
       ],
-      "entrypoint": "__init__.py",
+      "entrypoint": "parasitic.py",
       "icons-light": [
-        "icon.png"
+        "icon_small.png"
       ],
       "icons-dark": [
-        "icon.png"
+        "icon_small.png"
       ]
     }
   ]

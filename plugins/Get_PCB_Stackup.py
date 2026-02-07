@@ -1,10 +1,10 @@
 from os.path import exists
 from pathlib import Path
 
-if __name__ == "__main__":
-    from s_expression_parse import parse_sexp
-else:
+try:
     from .s_expression_parse import parse_sexp
+except ImportError:
+    from s_expression_parse import parse_sexp
 
 import re
 
@@ -50,7 +50,9 @@ def search_recursive(line: list, entry: str, all=False):
     return None
 
 
-def Get_PCB_Stackup_fun(ProjectPath: str | Path = "./test.kicad_pcb", new_v9=True, board_thickness=None):
+def Get_PCB_Stackup_fun(
+    ProjectPath: str | Path = "./test.kicad_pcb", new_v9=True, board_thickness=None
+):
     def readFile2var(path):
         if not exists(path):
             return None
@@ -59,7 +61,7 @@ def Get_PCB_Stackup_fun(ProjectPath: str | Path = "./test.kicad_pcb", new_v9=Tru
             data = file.read()
         return data
 
-    PhysicalLayerStack = []
+    layers = []
     CuStack = {}
     parsed = None
     try:
@@ -82,6 +84,7 @@ def Get_PCB_Stackup_fun(ProjectPath: str | Path = "./test.kicad_pcb", new_v9=Tru
                     tmp["layer"] = search_recursive(layer, "layer")
                     tmp["thickness"] = search_recursive(layer, "thickness")
                     tmp["epsilon_r"] = search_recursive(layer, "epsilon_r")
+                    tmp["loss_tangent"] = search_recursive(layer, "loss_tangent")
                     tmp["type"] = search_recursive(layer, "type")
 
                     if tmp["thickness"] is not None:
@@ -93,51 +96,94 @@ def Get_PCB_Stackup_fun(ProjectPath: str | Path = "./test.kicad_pcb", new_v9=Tru
                             )
                         tmp["abs_height"] = abs_height
                         abs_height += float(tmp["thickness"])
-                        PhysicalLayerStack.append(tmp)
+                        layers.append(tmp)
                 break
 
-            for Layer in PhysicalLayerStack:
+            for i, Layer in enumerate(layers):
                 if Layer["cu_layer"] is not None:
-                    CuStack[Layer["cu_layer"]] = {
-                        "thickness": Layer["thickness"],
-                        "name": Layer["layer"],
-                        "abs_height": Layer["abs_height"],
-                    }
-                    if Layer["thickness"] <= 0:
+                    t = float(Layer["thickness"]) / 1000  # mm → m
+                    if t <= 0:
                         raise Exception("Problematic layer thickness detected")
+
+                    def _die_info(idx):
+                        if 0 <= idx < len(layers):
+                            d = layers[idx]
+                            if d["type"] in ("core", "prepreg"):
+                                return {
+                                    "h": float(d["thickness"]) / 1000,
+                                    "epsilon_r": float(d["epsilon_r"])
+                                    if d["epsilon_r"]
+                                    else 4.3,
+                                    "loss_tangent": float(d["loss_tangent"])
+                                    if d["loss_tangent"]
+                                    else 0.02,
+                                }
+                        return None
+
+                    die_above = _die_info(i - 1)
+                    die_below = _die_info(i + 1)
+
+                    if die_above and die_below:
+                        model = "Stripline"
+                    elif die_above or die_below:
+                        model = "Microstrip"
+                    else:
+                        model = "R only"
+
+                    CuStack[Layer["cu_layer"]] = {
+                        "thickness": t,
+                        "name": Layer["layer"],
+                        "abs_height": Layer["abs_height"] / 1000,  # mm → m
+                        "die_above": die_above,
+                        "die_below": die_below,
+                        "model": model,
+                        "gap": None,
+                    }
     except Exception:
         print("ERROR: Reading the CuStack")
 
+    # Fallback: 2-layer board with default values
     if not CuStack:
-        layers = search_recursive(parsed, "layers", all=True) if parsed else None
-        if layers:
-            cu_layers = []
-            for layer in layers:
-                if isinstance(layer, list) and "signal" in layer:
-                    layer_name = layer[1]
-                    extract_fn = extract_layer_from_string if new_v9 else extract_layer_from_string_old
-                    cu_layer = extract_fn(layer_name)
-                    if cu_layer is not None:
-                        cu_layers.append((cu_layer, layer_name))
-
-            cu_layers.sort(key=lambda x: x[0])
-            n = len(cu_layers)
-            total_height = board_thickness if board_thickness else 1.6
-
-            for i, (cu_layer, layer_name) in enumerate(cu_layers):
-                CuStack[cu_layer] = {
-                    "thickness": 0.035,
-                    "name": layer_name,
-                    "abs_height": i * total_height / max(1, n - 1) if n > 1 else 0.0,
-                }
-            if CuStack:
-                print("WARNING: No stackup found, estimated CuStack:", CuStack)
-
-    if not CuStack:
-        total = board_thickness if board_thickness else 1.6
-        print(f"WARNING: No layer info found. Using 2-layer default: {total}mm, 35µm copper")
+        total = board_thickness if board_thickness else 1.6e-3  # 1.6 mm in m
+        t_cu = 35e-6
+        h_die = total - 2 * t_cu
+        print(
+            f"WARNING: No layer info found. Using 2-layer default: {total * 1000}mm, 35µm copper"
+        )
         b_cu = 2 if new_v9 else 31
-        CuStack[0] = {"thickness": 0.035, "name": "F.Cu", "abs_height": 0.0}
-        CuStack[b_cu] = {"thickness": 0.035, "name": "B.Cu", "abs_height": total}
+        die = {"h": h_die, "epsilon_r": 4.3, "loss_tangent": 0.02}
+        CuStack[0] = {
+            "thickness": t_cu,
+            "name": "F.Cu",
+            "abs_height": 0.0,
+            "die_above": None,
+            "die_below": die,
+            "model": "Microstrip",
+            "gap": 0.2e-3,
+        }
+        CuStack[b_cu] = {
+            "thickness": t_cu,
+            "name": "B.Cu",
+            "abs_height": total,
+            "die_above": die,
+            "die_below": None,
+            "model": "Microstrip",
+            "gap": 0.2e-3,
+        }
 
-    return PhysicalLayerStack, CuStack
+    return CuStack
+
+
+if __name__ == "__main__":
+    test_file = "./test_kicad.kicad_pcb"
+    print(f"Testing: {test_file}\n")
+
+    CuStack = Get_PCB_Stackup_fun(test_file)
+
+    print("=== CuStack ===")
+    for layer_id, info in sorted(CuStack.items()):
+        print(f"\nLayer {layer_id} ({info['name']}):")
+        print(f"  thickness:    {info['thickness'] * 1e6:.1f} µm")
+        print(f"  abs_height:   {info['abs_height'] * 1000:.3f} mm")
+        print(f"  die_above:    {info['die_above']}")
+        print(f"  die_below:    {info['die_below']}")

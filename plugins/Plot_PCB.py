@@ -9,7 +9,6 @@ def Plot_PCB(data):
     axes.set_aspect(1)
     axes.invert_yaxis()
 
-
     Color = {0: "red", 1: "green", 2: "orange", 3: "cyan", 4: "pink", 31: "blue"}
     for i in range(0, 32):
         if i not in Color:

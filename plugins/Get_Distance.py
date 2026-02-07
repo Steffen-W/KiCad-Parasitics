@@ -1,5 +1,6 @@
 import heapq
 import math
+from collections import deque
 
 
 def dijkstra(graph, start_node):
@@ -24,10 +25,10 @@ def find_all_reachable_nodes(graph, start_node):
     if start_node not in graph:
         return set()
     visited = set()
-    queue = [start_node]
+    queue = deque([start_node])
     visited.add(start_node)
     while queue:
-        current = queue.pop(0)
+        current = queue.popleft()
         for neighbor in graph[current].keys():
             if neighbor not in visited:
                 visited.add(neighbor)

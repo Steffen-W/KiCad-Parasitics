@@ -1,25 +1,35 @@
 import os
 import platform
 import logging
-from ctypes import (CDLL, CFUNCTYPE, Structure, c_int, c_char_p, c_void_p,
-                    c_bool, c_double, POINTER, c_short)
+from ctypes import (
+    CDLL,
+    CFUNCTYPE,
+    Structure,
+    c_int,
+    c_char_p,
+    c_void_p,
+    c_bool,
+    c_double,
+    POINTER,
+    c_short,
+)
 from ctypes.util import find_library
 
 logger = logging.getLogger(__name__)
 
 # libngspice source code is listed before the relevant ctype structs
 
-if os.name == 'nt':  # Windows
+if os.name == "nt":  # Windows
     # http://stackoverflow.com/a/13277363
     curr_dir_before = os.getcwd()
 
-    drive = os.getenv("SystemDrive") or 'C:'
+    drive = os.getenv("SystemDrive") or "C:"
 
     # Python and DLL must both be same number of bits
-    if platform.architecture()[0] == '64bit':
-        spice_path = os.path.join(drive, os.sep, 'Spice64')
-    elif platform.architecture()[0] == '32bit':
-        spice_path = os.path.join(drive, os.sep, 'Spice')
+    if platform.architecture()[0] == "64bit":
+        spice_path = os.path.join(drive, os.sep, "Spice64")
+    elif platform.architecture()[0] == "32bit":
+        spice_path = os.path.join(drive, os.sep, "Spice")
     else:
         raise RuntimeError("Couldn't determine if Python is 32-bit or 64-bit")
 
@@ -30,25 +40,24 @@ if os.name == 'nt':  # Windows
     it tries `%SPICE_LIB_DIR%\\scripts\\spinit`
     """
 
-    if 'SPICE_LIB_DIR' not in os.environ:
-        os.environ['SPICE_LIB_DIR'] = os.path.join(spice_path, 'share',
-                                                   'ngspice')
-    
+    if "SPICE_LIB_DIR" not in os.environ:
+        os.environ["SPICE_LIB_DIR"] = os.path.join(spice_path, "share", "ngspice")
+
     try:
-        spice = CDLL('ngspice')
-    except:
-        os.chdir(os.path.join(spice_path, 'bin_dll'))
-        spice = CDLL('ngspice')
+        spice = CDLL("ngspice")
+    except OSError:
+        os.chdir(os.path.join(spice_path, "bin_dll"))
+        spice = CDLL("ngspice")
         os.chdir(curr_dir_before)
 else:  # Linux, etc.
-    try:
-        lib_location = os.environ['LIBNGSPICE']
-    except KeyError:
-        lib_location = find_library('ngspice')
-    
+    lib_location = os.environ.get("LIBNGSPICE") or find_library("ngspice")
+
     # try homebrew location as a last resort for MacOS
     if lib_location is None and platform.system() == "Darwin":
         lib_location = "/opt/homebrew/lib/libngspice.dylib"
+
+    if lib_location is None:
+        raise OSError("ngspice library not found. Install ngspice or set LIBNGSPICE.")
 
     spice = CDLL(lib_location)
 
@@ -59,8 +68,8 @@ captured_output = []
 def printfcn(output, _id, _ret):
     """Callback for libngspice to print a message"""
     global captured_output
-    prefix, _, content = output.decode('ascii').partition(' ')
-    if prefix == 'stderr':
+    prefix, _, content = output.decode("ascii").partition(" ")
+    if prefix == "stderr":
         logger.error(content)
     else:
         captured_output.append(content)
@@ -72,18 +81,24 @@ def statfcn(status, _id, _ret):
     """
     Callback for libngspice to report simulation status like 'tran 5%'
     """
-    logger.debug(status.decode('ascii'))
+    logger.debug(status.decode("ascii"))
     return 0
 
 
 @CFUNCTYPE(c_int, c_int, c_bool, c_bool, c_int, c_void_p)
-def controlled_exit(exit_status, immediate_unloading, requested_exit,
-                    libngspice_id, ret):
-    logger.debug('ControlledExit',
-                 dict(exit_status=exit_status,
-                      immediate_unloading=immediate_unloading,
-                      requested_exit=requested_exit,
-                      libngspice_id=libngspice_id, ret=ret))
+def controlled_exit(
+    exit_status, immediate_unloading, requested_exit, libngspice_id, ret
+):
+    logger.debug(
+        "ControlledExit",
+        dict(
+            exit_status=exit_status,
+            immediate_unloading=immediate_unloading,
+            requested_exit=requested_exit,
+            libngspice_id=libngspice_id,
+            ret=ret,
+        ),
+    )
 
 
 # typedef struct vecvalues {
@@ -97,11 +112,12 @@ def controlled_exit(exit_status, immediate_unloading, requested_exit,
 
 class vecvalues(Structure):
     _fields_ = [
-        ('name', c_char_p),
-        ('creal', c_double),
-        ('cimag', c_double),
-        ('is_scale', c_bool),
-        ('is_complex', c_bool)]
+        ("name", c_char_p),
+        ("creal", c_double),
+        ("cimag", c_double),
+        ("is_scale", c_bool),
+        ("is_complex", c_bool),
+    ]
 
 
 # typedef struct vecvaluesall {
@@ -113,17 +129,23 @@ class vecvalues(Structure):
 
 class vecvaluesall(Structure):
     _fields_ = [
-        ('veccount', c_int),
-        ('vecindex', c_int),
-        ('vecsa', POINTER(POINTER(vecvalues)))]
+        ("veccount", c_int),
+        ("vecindex", c_int),
+        ("vecsa", POINTER(POINTER(vecvalues))),
+    ]
 
 
 @CFUNCTYPE(c_int, POINTER(vecvaluesall), c_int, c_int, c_void_p)
 def send_data(vecvaluesall_, num_structs, libngspice_id, ret):
-    logger.debug('SendData', dict(vecvaluesall=vecvaluesall_,
-                                  num_structs=num_structs,
-                                  libngspice_id=libngspice_id,
-                                  ret=ret))
+    logger.debug(
+        "SendData",
+        dict(
+            vecvaluesall=vecvaluesall_,
+            num_structs=num_structs,
+            libngspice_id=libngspice_id,
+            ret=ret,
+        ),
+    )
 
 
 # int  ngSpice_Command(char* command);
@@ -143,10 +165,9 @@ spice.ngSpice_CurPlot.restype = c_char_p
 #    double cx_imag;
 # } ;
 
+
 class ngcomplex(Structure):
-    _fields_ = [
-        ('cx_real', c_double),
-        ('cx_imag', c_double)]
+    _fields_ = [("cx_real", c_double), ("cx_imag", c_double)]
 
 
 # /* Dvec flags. */
@@ -163,14 +184,14 @@ class ngcomplex(Structure):
 
 
 class dvec_flags(object):
-    vf_real = (1 << 0)  # The data is real.
-    vf_complex = (1 << 1)  # The data is complex.
-    vf_accum = (1 << 2)  # writedata should save this vector.
-    vf_plot = (1 << 3)  # writedata should incrementally plot it.
-    vf_print = (1 << 4)  # writedata should print this vector.
-    vf_mingiven = (1 << 5)  # The v_minsignal value is valid.
-    vf_maxgiven = (1 << 6)  # The v_maxsignal value is valid.
-    vf_permanent = (1 << 7)  # Don't garbage collect this vector.
+    vf_real = 1 << 0  # The data is real.
+    vf_complex = 1 << 1  # The data is complex.
+    vf_accum = 1 << 2  # writedata should save this vector.
+    vf_plot = 1 << 3  # writedata should incrementally plot it.
+    vf_print = 1 << 4  # writedata should print this vector.
+    vf_mingiven = 1 << 5  # The v_minsignal value is valid.
+    vf_maxgiven = 1 << 6  # The v_maxsignal value is valid.
+    vf_permanent = 1 << 7  # Don't garbage collect this vector.
 
 
 # /* vector info obtained from any vector in ngspice.dll.
@@ -188,12 +209,13 @@ class dvec_flags(object):
 
 class vector_info(Structure):
     _fields_ = [
-        ('v_name', c_char_p),
-        ('v_type', c_int),
-        ('v_flags', c_short),
-        ('v_realdata', POINTER(c_double)),
-        ('v_compdata', POINTER(ngcomplex)),
-        ('v_length', c_int)]
+        ("v_name", c_char_p),
+        ("v_type", c_int),
+        ("v_flags", c_short),
+        ("v_realdata", POINTER(c_double)),
+        ("v_compdata", POINTER(ngcomplex)),
+        ("v_length", c_int),
+    ]
 
 
 # /* get info about a vector */
@@ -203,27 +225,27 @@ spice.ngGet_Vec_Info.argtypes = [c_char_p]
 
 # Unit names for use with pint or other unit libraries
 vector_type = [
-    'dimensionless',  # notype = 0
-    'second',  # time = 1
-    'hertz',  # frequency = 2
-    'volt',  # voltage = 3
-    'ampere',  # current = 4
-    'NotImplemented',  # output_n_dens = 5
-    'NotImplemented',  # output_noise = 6
-    'NotImplemented',  # input_n_dens = 7
-    'NotImplemented',  # input_noise = 8
-    'NotImplemented',  # pole = 9
-    'NotImplemented',  # zero = 10
-    'NotImplemented',  # sparam = 11
-    'NotImplemented',  # temp = 12
-    'ohm',  # res = 13
-    'ohm',  # impedance = 14
-    'siemens',  # admittance = 15
-    'watt',  # power = 16
-    'dimensionless'  # phase = 17
-    'NotImplemented',  # db = 18
-    'farad'  # capacitance = 19
-    'coulomb'  # charge = 21
+    "dimensionless",  # notype = 0
+    "second",  # time = 1
+    "hertz",  # frequency = 2
+    "volt",  # voltage = 3
+    "ampere",  # current = 4
+    "NotImplemented",  # output_n_dens = 5
+    "NotImplemented",  # output_noise = 6
+    "NotImplemented",  # input_n_dens = 7
+    "NotImplemented",  # input_noise = 8
+    "NotImplemented",  # pole = 9
+    "NotImplemented",  # zero = 10
+    "NotImplemented",  # sparam = 11
+    "NotImplemented",  # temp = 12
+    "ohm",  # res = 13
+    "ohm",  # impedance = 14
+    "siemens",  # admittance = 15
+    "watt",  # power = 16
+    "dimensionless",  # phase = 17
+    "NotImplemented",  # db = 18
+    "farad",  # capacitance = 19
+    "coulomb",  # charge = 21
 ]
 
 

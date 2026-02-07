@@ -1,9 +1,9 @@
 from collections import defaultdict
 
-# Return values for error handling
-OK = 0
-NotYetConnected = 0
-ErrorConnection = -1
+# Network assignment states
+# Valid net IDs are > 0, so 0 means "not yet assigned"
+NOT_ASSIGNED = 0
+ERROR = -1
 
 
 def Connect_Nets(data):
@@ -14,8 +14,8 @@ def Connect_Nets(data):
     # Initialization: Ensure missing keys exist to prevent KeyError
     for uuid, d in data.items():
         data[uuid].setdefault("layer", [])
-        data[uuid].setdefault("net_start", defaultdict(lambda: NotYetConnected))
-        data[uuid].setdefault("net_end", defaultdict(lambda: NotYetConnected))
+        data[uuid].setdefault("net_start", defaultdict(lambda: NOT_ASSIGNED))
+        data[uuid].setdefault("net_end", defaultdict(lambda: NOT_ASSIGNED))
 
     def getNet(conn, uuid, layer, pos: tuple = (0, 0)):
         """
@@ -28,36 +28,36 @@ def Connect_Nets(data):
             pos: Position hint for wire-to-wire connections
 
         Returns:
-            Network ID if found, NotYetConnected if not assigned yet,
-            ErrorConnection if layer mismatch or connection data is corrupt
+            Network ID (>0) if found, NOT_ASSIGNED (0) if not assigned yet,
+            ERROR (-1) if layer mismatch or connection data is corrupt
         """
         if conn not in data:
-            return NotYetConnected
+            return NOT_ASSIGNED
 
         if layer not in data[conn].get("layer", []):
-            return ErrorConnection
+            return ERROR
 
         conn_data = data[conn]
 
         if conn_data["type"] == "ZONE":  # handled in Get_Parasitic
-            return NotYetConnected
+            return NOT_ASSIGNED
 
         if conn_data["type"] == "WIRE":
             # For wires: check which end connects to us based on connection list
             if uuid in conn_data.get("conn_start", []):
-                return conn_data["net_start"].get(layer, NotYetConnected)
+                return conn_data["net_start"].get(layer, NOT_ASSIGNED)
             elif uuid in conn_data.get("conn_end", []):
-                return conn_data["net_end"].get(layer, NotYetConnected)
+                return conn_data["net_end"].get(layer, NOT_ASSIGNED)
             # Fallback: try to match by position (for incomplete connection data)
             if pos == conn_data.get("start", (0, 0)):
-                return conn_data["net_start"].get(layer, NotYetConnected)
+                return conn_data["net_start"].get(layer, NOT_ASSIGNED)
             if pos == conn_data.get("end", (0, 0)):
-                return conn_data["net_end"].get(layer, NotYetConnected)
+                return conn_data["net_end"].get(layer, NOT_ASSIGNED)
             # No match found - connection data is corrupt/incomplete
-            return ErrorConnection
+            return ERROR
         else:
             # For vias/pads: use netStart (they have single connection point per layer)
-            return conn_data["net_start"].get(layer, NotYetConnected)
+            return conn_data["net_start"].get(layer, NOT_ASSIGNED)
 
     def setNet(conn, uuid, layer, newNet, pos: tuple = (0, 0)):
         """
@@ -69,20 +69,16 @@ def Connect_Nets(data):
             layer: The layer to set the network for
             newNet: The network ID to assign
             pos: Position hint for wire-to-wire connections
-
-        Returns:
-            OK on success, ErrorConnection if layer mismatch or connection data is corrupt
         """
         if conn not in data:
-            return ErrorConnection
-
+            return
         if layer not in data[conn].get("layer", []):
-            return ErrorConnection
+            return
 
         conn_data = data[conn]
 
         if conn_data["type"] == "ZONE":  # handled in Get_Parasitic
-            return OK
+            return
 
         if conn_data["type"] == "WIRE":
             # For wires: set the appropriate end based on connection list
@@ -95,14 +91,10 @@ def Connect_Nets(data):
                 conn_data["net_start"][layer] = newNet
             elif pos == conn_data.get("end", (0, 0)):
                 conn_data["net_end"][layer] = newNet
-            else:
-                # No match found - connection data is corrupt/incomplete
-                return ErrorConnection
+            # else: no match - silently ignore (connection data incomplete)
         else:
             # For vias/pads: set netStart
             conn_data["net_start"][layer] = newNet
-
-        return OK
 
     # Connecting networks
     nodeCounter = 0
@@ -119,22 +111,22 @@ def Connect_Nets(data):
                 continue
 
             for layer in d["layer"]:
-                if d["net_start"].get(layer, NotYetConnected) > NotYetConnected:
+                if d["net_start"].get(layer, NOT_ASSIGNED) > NOT_ASSIGNED:
                     continue
 
                 pos = d.get("start", d.get("position", (0, 0)))
-                tempNet = NotYetConnected
+                tempNet = NOT_ASSIGNED
 
                 # Try to get network from connected elements
                 for conn in d.get("conn_start", []):
                     if conn in data:
                         tmp = getNet(conn, uuid, layer, pos)
-                        if tmp > NotYetConnected:
+                        if tmp > NOT_ASSIGNED:
                             tempNet = tmp
                             break
 
                 # If no network found, create a new one
-                if tempNet == NotYetConnected:
+                if tempNet == NOT_ASSIGNED:
                     nodeCounter += 1
                     tempNet = nodeCounter
                     changed = True
@@ -149,27 +141,27 @@ def Connect_Nets(data):
         # Process netEnd connections
         for uuid, d in data.items():
             for layer in d["layer"]:
-                if d["net_end"].get(layer, NotYetConnected) > NotYetConnected:
+                if d["net_end"].get(layer, NOT_ASSIGNED) > NOT_ASSIGNED:
                     continue
 
                 pos = d.get("end", d.get("position", (0, 0)))
-                tempNet = NotYetConnected
+                tempNet = NOT_ASSIGNED
 
                 # Try to get network from connected elements
                 for conn in d.get("conn_end", []):
                     if conn in data:
                         tmp = getNet(conn, uuid, layer, pos)
-                        if tmp > NotYetConnected:
+                        if tmp > NOT_ASSIGNED:
                             tempNet = tmp
                             break
 
                 # If no network from connections, try to use netStart (but NOT for wires)
                 # Wires need separate nodes for each end to calculate resistance
-                if tempNet == NotYetConnected and d.get("type") != "WIRE":
-                    tempNet = d["net_start"].get(layer, NotYetConnected)
+                if tempNet == NOT_ASSIGNED and d.get("type") != "WIRE":
+                    tempNet = d["net_start"].get(layer, NOT_ASSIGNED)
 
                 # If still no network, create a new one
-                if tempNet == NotYetConnected:
+                if tempNet == NOT_ASSIGNED:
                     nodeCounter += 1
                     tempNet = nodeCounter
                     changed = True

@@ -55,7 +55,6 @@ def print_sexp(exp):
 
 
 if __name__ == "__main__":
-
     sexp = """(sym_lib_table
   (version 7)
   (lib (name "4xxx")(type "KiCad")(uri "${KICAD7_SYMBOL_DIR}/4xxx.kicad_sym")(options "")(descr "4xxx series symbols"))
