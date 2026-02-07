@@ -90,6 +90,7 @@ All elements connected to the same zone are treated as low-resistance connection
 The **Calc Inductance** button appears next to "Details" when a shortest path exists. It computes the loop inductance of that path using [bfieldtools](https://bfieldtools.github.io/) (BEM on triangulated surface meshes). The trace center-line is buffered to its width, triangulated, and assigned z-coordinates per layer from the stackup. Multi-layer paths with vias are supported.
 
 Requires additional packages: `bfieldtools`, `shapely`, `triangle`, `trimesh`, `scipy<1.14`.
+<img width="1017" height="665" alt="grafik" src="https://github.com/user-attachments/assets/bbfc86a4-480f-494b-8597-f3ede231d3c2" />
 
 ## Limitations
 
@@ -103,7 +104,7 @@ Requires additional packages: `bfieldtools`, `shapely`, `triangle`, `trimesh`, `
 - **Inductance – arcs**: Arc tracks are treated as straight lines (chord) for the inductance mesh.
 - **IPC API – no native connectivity**: The IPC API does not provide connectivity data (unlike pcbnew's `CONNECTIVITY_DATA`). Connections are determined by geometric coordinate matching. This may reduce performance on very large nets (please open an issue if this is noticeable). Additionally, traces that connect mid-segment (not at a track endpoint) are currently not detected as connected.
 
-<img width="969" height="872" alt="image" src="https://github.com/user-attachments/assets/b588b122-91ba-4538-b0dd-d0f684971774" />
+<img width="825" height="713" alt="grafik" src="https://github.com/user-attachments/assets/eae13447-8f02-461b-81b4-e6a2fd24f130" />
 
 # Example
 
@@ -112,12 +113,12 @@ First install Kicad-Parasitic from the Kicad "Plugin and Content Manager", then:
 - go to File -> Open Demo Project ...
 - select Stickhub folder
 - select StickHub.kicad_pro
-![grafik](https://user-images.githubusercontent.com/3403218/274055069-4780a4f3-2c2f-4d14-8325-577f7d687760.png)
 - open StickHub.kicad_pcb
 - zoom in to the front layer, close to the USB connector
 - select the two D- vias
 - press on the "parasitic" icon
-![grafik](https://user-images.githubusercontent.com/3403218/274056663-e2c870e7-c23e-4c59-855d-cbc0a39c98f6.png)
+<img width="1609" height="1115" alt="grafik" src="https://github.com/user-attachments/assets/fb002977-aebe-409e-8f98-523c0edcc2c3" />
+
 
 # Tested until now
 
