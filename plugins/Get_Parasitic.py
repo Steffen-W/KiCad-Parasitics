@@ -430,19 +430,21 @@ def extract_network(data, CuStack, netcode=None, debug=0, debug_print=None):
                 )
                 resistors.append([netStart, netEnd, trace["r_dc"], d["length"]])
 
-                network_info.append(
-                    {
-                        "type": "WIRE",
-                        "nodes": (netStart, netEnd),
-                        "resistance": trace["r_dc"],
-                        "length": d["length"],
-                        "width": d["width"],
-                        "layer": Layer,
-                        "layer_name": CuStack[Layer]["name"],
-                        "start": d["start"],
-                        "end": d["end"],
-                    }
-                )
+                info = {
+                    "type": "WIRE",
+                    "nodes": (netStart, netEnd),
+                    "resistance": trace["r_dc"],
+                    "length": d["length"],
+                    "width": d["width"],
+                    "layer": Layer,
+                    "layer_name": CuStack[Layer]["name"],
+                    "start": d["start"],
+                    "end": d["end"],
+                }
+                for key in ("mid", "radius", "angle"):
+                    if key in d:
+                        info[key] = d[key]
+                network_info.append(info)
 
                 coordinates[netStart] = (
                     d["start"][0],

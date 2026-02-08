@@ -25,13 +25,11 @@ try:
     from .Get_PCB_Stackup import Get_PCB_Stackup_fun
     from .Get_Parasitic import extract_network, find_path, simulate_network
     from .network_display import format_network_info
-    from .calc_inductance import calc_path_inductance
 except ImportError:
     from Connect_Nets import Connect_Nets
     from Get_PCB_Stackup import Get_PCB_Stackup_fun
     from Get_Parasitic import extract_network, find_path, simulate_network
     from network_display import format_network_info
-    from calc_inductance import calc_path_inductance
 
 
 def analyze_pcb_parasitic(
@@ -341,11 +339,31 @@ class ResultDialog(wx.Dialog):
         result = self.analysis_result
         if not result:
             return
-        ind = calc_path_inductance(
-            result["path"],
-            result["network_info"],
-            self.cu_stack,
-        )
+        try:
+            try:
+                from .calc_inductance import calc_path_inductance
+            except ImportError:
+                from calc_inductance import calc_path_inductance
+            ind = calc_path_inductance(
+                result["path"],
+                result["network_info"],
+                self.cu_stack,
+                debug=1,
+            )
+        except ImportError as e:
+            import sys
+
+            python_exe = sys.executable
+            ind = {
+                "message": (
+                    f"ERROR: {e}\n\n"
+                    f"Install missing packages with:\n"
+                    f"  {python_exe} -m pip install bfieldtools trimesh scipy\n\n"
+                    f"Alternatively, use the KiCad IPC API which manages\n"
+                    f"dependencies automatically:\n"
+                    f"  KiCad -> Settings -> Plugins -> Enable KiCad API"
+                )
+            }
 
         dlg = wx.Dialog(
             self,
@@ -363,14 +381,39 @@ class ResultDialog(wx.Dialog):
             10, wx.FONTFAMILY_TELETYPE, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL
         )
         text_ctrl.SetFont(font)
+        text_ctrl.SetInsertionPoint(0)
 
         sizer.Add(text_ctrl, 1, wx.ALL | wx.EXPAND, 10)
-        sizer.Add(wx.Button(dlg, wx.ID_OK, "Close"), 0, wx.ALIGN_CENTER | wx.BOTTOM, 10)
+
+        btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        if ind.get("_debug_data"):
+            debug_btn = wx.Button(dlg, label="Debug Plots")
+            debug_data = ind["_debug_data"]
+            segs = ind["segments"]
+            debug_btn.Bind(
+                wx.EVT_BUTTON,
+                lambda _evt: self._show_debug_plots(debug_data, segs),
+            )
+            btn_sizer.Add(debug_btn, 0, wx.ALL, 5)
+        close_btn = wx.Button(dlg, wx.ID_OK, "Close")
+        btn_sizer.Add(close_btn, 0, wx.ALL, 5)
+        sizer.Add(btn_sizer, 0, wx.ALIGN_CENTER | wx.BOTTOM, 10)
 
         dlg.SetSizer(sizer)
         dlg.SetSize(wx.Size(600, 400))
         dlg.ShowModal()
         dlg.Destroy()
+
+    @staticmethod
+    def _show_debug_plots(debug_data, segments):
+        try:
+            try:
+                from .calc_inductance import show_debug_plots
+            except ImportError:
+                from calc_inductance import show_debug_plots
+            show_debug_plots(debug_data, segments)
+        except Exception:
+            pass
 
 
 def SaveDictToFile(dict_name, filename):
@@ -386,7 +429,7 @@ def SaveDictToFile(dict_name, filename):
 
 def run_plugin(plugin_path, ItemList, board_FileName, new_v9):
     try:
-        debug = 1
+        debug = 0
         debug_log_file = None
         if debug:
             debug_log_file = os.path.join(plugin_path, "parasitics_debug.log")

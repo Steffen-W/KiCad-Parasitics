@@ -5,31 +5,23 @@ Receives the path segments (WIRE + VIA elements) extracted from the PCB
 network and computes the loop inductance of the trace path.
 """
 
-import sys
+import math
 import numpy as np
+import trimesh
+from scipy.spatial import cKDTree
+from bfieldtools.mesh_impedance import self_inductance_matrix
+from bfieldtools.utils import find_mesh_boundaries
 
-HAS_BFIELDTOOLS = False
-_IMPORT_ERROR = ""
-_PYTHON_EXE = sys.executable
-try:
-    import trimesh
-    from shapely.geometry import LineString
-    import triangle as tr
-    from scipy.spatial import cKDTree
-    from bfieldtools.mesh_impedance import self_inductance_matrix
-    from bfieldtools.utils import find_mesh_boundaries
 
-    HAS_BFIELDTOOLS = True
-except ImportError as _e:
-    _IMPORT_ERROR = str(_e)
-
+_MESH_TARGET_FACES = 2000
+_MAX_MESH_FACES = 5000
 
 # =========================================================================
 # Public API
 # =========================================================================
 
 
-def calc_path_inductance(path, network_info, cu_stack, debug_print=None):
+def calc_path_inductance(path, network_info, cu_stack, debug_print=None, debug=0):
     """Calculate the inductance of a PCB trace path.
 
     Parameters
@@ -46,6 +38,8 @@ def calc_path_inductance(path, network_info, cu_stack, debug_print=None):
         - abs_height (m), thickness (m), name (str), ...
     debug_print : callable, optional
         Print function for debug output.
+    debug : int
+        Debug level. >= 1: save debug plot on error.
 
     Returns
     -------
@@ -58,7 +52,7 @@ def calc_path_inductance(path, network_info, cu_stack, debug_print=None):
         debug_print = print
 
     segments = _extract_segments(path, network_info, cu_stack, debug_print)
-    return _compute_inductance(segments, debug_print)
+    return _compute_inductance(segments, debug_print, debug=debug)
 
 
 # =========================================================================
@@ -90,23 +84,25 @@ def _extract_segments(path, network_info, cu_stack, debug_print):
             z = cu_stack[layer_id]["abs_height"] if layer_id in cu_stack else 0.0
             # Store which node is at which end for direction tracking
             node_start, node_end = elem["nodes"]
-            segments.append(
-                {
-                    "type": "WIRE",
-                    "start": elem["start"],
-                    "end": elem["end"],
-                    "node_at_start": node_start,
-                    "node_at_end": node_end,
-                    "path_from": node_a,
-                    "path_to": node_b,
-                    "width": elem["width"],
-                    "length": elem["length"],
-                    "layer": layer_id,
-                    "layer_name": elem.get("layer_name", "?"),
-                    "z": z,
-                    "thickness": cu_stack.get(layer_id, {}).get("thickness", 35e-6),
-                }
-            )
+            seg = {
+                "type": "WIRE",
+                "start": elem["start"],
+                "end": elem["end"],
+                "node_at_start": node_start,
+                "node_at_end": node_end,
+                "path_from": node_a,
+                "path_to": node_b,
+                "width": elem["width"],
+                "length": elem["length"],
+                "layer": layer_id,
+                "layer_name": elem.get("layer_name", "?"),
+                "z": z,
+                "thickness": cu_stack.get(layer_id, {}).get("thickness", 35e-6),
+            }
+            for key in ("mid", "radius", "angle"):
+                if key in elem:
+                    seg[key] = elem[key]
+            segments.append(seg)
 
         elif elem["type"] == "VIA":
             z1 = cu_stack.get(elem["layer1"], {}).get("abs_height", 0.0)
@@ -127,83 +123,189 @@ def _extract_segments(path, network_info, cu_stack, debug_print):
     return segments
 
 
+def show_debug_plots(debug_data, segments):
+    """Show interactive debug plots for centerline and mesh.
+
+    Parameters
+    ----------
+    debug_data : dict with centerline, mesh_vertices, mesh_faces
+    segments : list[dict] – segment descriptors
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.tri as mtri
+
+    layer_colors = {
+        "F.Cu": "red",
+        "B.Cu": "blue",
+        "In1.Cu": "green",
+        "In2.Cu": "orange",
+    }
+
+    centerline = debug_data["centerline"]
+    cl = np.array(centerline) * 1e3
+    verts_mm = debug_data["mesh_vertices"][:, :2] * 1e3
+    faces = debug_data["mesh_faces"]
+
+    # --- Figure 1: Centerline ---
+    fig1, ax1 = plt.subplots(figsize=(10, 10))
+    drawn_layers = set()
+    for seg in segments:
+        if seg["type"] == "VIA":
+            px, py = seg["position"]
+            ax1.plot(
+                px * 1e3,
+                py * 1e3,
+                "kx",
+                ms=8,
+                mew=2,
+                zorder=6,
+                label="VIA" if "VIA" not in drawn_layers else None,
+            )
+            drawn_layers.add("VIA")
+            continue
+        if seg["type"] != "WIRE":
+            continue
+        layer_name = seg.get("layer_name", "?")
+        color = layer_colors.get(layer_name, "gray")
+        s = np.array(seg["start"]) * 1e3
+        e = np.array(seg["end"]) * 1e3
+        mid = seg.get("mid")
+        if mid is not None:
+            pts = _arc_points(
+                seg["start"], seg["end"], mid, width=seg.get("width", 0.0)
+            )
+            pts_mm = [(seg["start"][0] * 1e3, seg["start"][1] * 1e3)]
+            pts_mm.extend((p[0] * 1e3, p[1] * 1e3) for p in pts)
+            xs, ys = zip(*pts_mm)
+            label = layer_name if layer_name not in drawn_layers else None
+            ax1.plot(xs, ys, ".-", color=color, lw=2, ms=4, label=label)
+        else:
+            label = layer_name if layer_name not in drawn_layers else None
+            ax1.plot(
+                [s[0], e[0]], [s[1], e[1]], ".-", color=color, lw=2, ms=4, label=label
+            )
+        drawn_layers.add(layer_name)
+    ax1.plot(cl[:, 0], cl[:, 1], "m--", lw=0.8, alpha=0.7, label="centerline")
+    ax1.plot(cl[0, 0], cl[0, 1], "go", ms=6, zorder=5, label="start")
+    ax1.plot(cl[-1, 0], cl[-1, 1], "rs", ms=6, zorder=5, label="end")
+    ax1.set_aspect("equal")
+    ax1.invert_yaxis()
+    ax1.legend(fontsize=7, loc="best")
+    ax1.set_title(f"Centerline – {len(cl)} pts")
+    ax1.set_xlabel("mm")
+    ax1.set_ylabel("mm")
+
+    # --- Figure 2: Strip mesh ---
+    fig2, ax2 = plt.subplots(figsize=(12, 12))
+    tri = mtri.Triangulation(verts_mm[:, 0], verts_mm[:, 1], faces)
+    ax2.triplot(tri, color="steelblue", lw=0.3, alpha=0.8)
+    ax2.plot(cl[:, 0], cl[:, 1], "m-", lw=1.5, alpha=0.8, label="centerline")
+    for seg in segments:
+        if seg["type"] == "VIA":
+            px, py = seg["position"]
+            ax2.plot(px * 1e3, py * 1e3, "kx", ms=8, mew=2, zorder=6)
+    ax2.set_aspect("equal")
+    ax2.invert_yaxis()
+    ax2.legend(fontsize=7, loc="best")
+    ax2.set_title(f"Strip mesh: {len(verts_mm)} vertices, {len(faces)} faces")
+    ax2.set_xlabel("mm")
+    ax2.set_ylabel("mm")
+
+    plt.show()
+
+
 # =========================================================================
 # Inductance computation
 # =========================================================================
 
 
-def _compute_inductance(segments, debug_print=None):
+def _compute_inductance(segments, debug_print=None, debug=0):
     """Compute inductance from physical trace segments.
 
-    1. Build ordered 2D centerline + z-profile from segments
+    1. Build ordered 3D centerline from segments
     2. Close the loop
-    3. Mesh the ring (shapely + triangle)
-    4. Assign z per vertex from layer info
-    5. Compute L via bfieldtools self_inductance_matrix
+    3. Build strip mesh (already 3D)
+    4. Compute stream function + L via bfieldtools self_inductance_matrix
     """
     if debug_print is None:
         debug_print = print
 
     # --- Format segment info ---
-    segment_lines, path_summary = _format_segments(segments)
+    segment_lines, path_summary, n_layers = _format_segments(segments)
 
-    if not HAS_BFIELDTOOLS:
-        lines = [
-            f"ERROR: {_IMPORT_ERROR}",
-            "",
-            "Install missing packages with:",
-            f'  {_PYTHON_EXE} -m pip install bfieldtools shapely triangle trimesh "scipy<1.14"',
-            "",
-            "Alternatively, use the KiCad IPC API which manages dependencies automatically:",
-            "  KiCad -> Settings -> Plugins -> Enable KiCad API, then restart KiCad.",
-        ]
-        msg = "\n".join(lines)
-        debug_print(f"[calc_inductance]\n{msg}")
-        return {"inductance": None, "segments": segments, "message": msg}
+    # --- Build ordered 3D centerline ---
+    centerline, width_per_seg = _build_centerline(segments, debug_print)
 
-    # --- Build ordered 2D centerline and z-profile ---
-    centerline_xy, z_per_seg = _build_centerline(segments)
-
-    if len(centerline_xy) < 3:
+    if len(centerline) < 3:
         return {
             "inductance": None,
             "segments": segments,
             "message": "ERROR: need at least 3 points for a loop",
         }
 
-    # Close the loop
-    start = np.array(centerline_xy[0])
-    end = np.array(centerline_xy[-1])
-    gap = np.linalg.norm(end - start)
-    centerline_xy.append(centerline_xy[0])
-    z_per_seg.append(z_per_seg[-1])
+    # Close the loop – required for inductance calculation even for open coils
+    start = np.array(centerline[0])
+    end = np.array(centerline[-1])
+    gap = np.linalg.norm(end[:2] - start[:2])
+    trace_width_prelim = min(width_per_seg)
+    if gap > trace_width_prelim * 10:
+        debug_print(
+            f"[calc_inductance] WARNING: closing loop with large gap\n"
+            f"  gap: {gap * 1e3:.2f} mm\n"
+            f"  trace width: {trace_width_prelim * 1e3:.2f} mm"
+        )
+    centerline.append(centerline[0])
+    width_per_seg.append(width_per_seg[-1])
 
-    # Trace width = minimum across all wire segments
-    wire_widths = [s["width"] for s in segments if s["type"] == "WIRE"]
-    trace_width = min(wire_widths)
-
-    # --- Mesh the 2D ring ---
-    centerline_mm = np.array(centerline_xy) * 1e3
-    mesh_flat = _trace_path_to_mesh(
-        centerline_mm, trace_width * 1e3, max_tri_area_mm2=0.02
-    )
-    psi = _build_stream_function(mesh_flat)
-
-    # --- Check if multi-layer (needs z-warping) ---
-    unique_z = sorted(set(z_per_seg))
-
-    if len(unique_z) > 1:
-        centerline_m = np.array(centerline_xy)
-        t_params = _compute_arc_params(mesh_flat.vertices[:, :2], centerline_m)
-        mesh_3d = _assign_z_from_segments(mesh_flat, t_params, centerline_m, z_per_seg)
-    else:
-        verts = mesh_flat.vertices.copy()
-        verts[:, 2] = unique_z[0]
-        mesh_3d = trimesh.Trimesh(vertices=verts, faces=mesh_flat.faces, process=False)
+    # --- Build strip mesh (already 3D) ---
+    try:
+        mesh = _build_strip_mesh(
+            centerline,
+            width_per_seg,
+            debug_print=debug_print,
+        )
+        psi = _build_stream_function(mesh)
+    except ValueError as e:
+        return {
+            "inductance": None,
+            "segments": segments,
+            "message": f"ERROR: {e}",
+        }
 
     # --- Compute inductance ---
+    n_verts = len(mesh.vertices)
+    n_faces = len(mesh.faces)
+    debug_print(f"[calc_inductance] Mesh: {n_verts} vertices, {n_faces} faces")
+
+    if n_faces > _MAX_MESH_FACES:
+        msg = "\n".join(
+            [
+                "ERROR: mesh too large",
+                f"  {n_faces} faces (max {_MAX_MESH_FACES})",
+                f"  {n_verts} vertices",
+                "",
+                "The trace path is too long or complex.",
+                "Try a shorter or simpler path between the pads.",
+            ]
+        )
+        debug_print(f"[calc_inductance] {msg}")
+        return {"inductance": None, "segments": segments, "message": msg}
+
     debug_print("[calc_inductance] Computing self-inductance matrix ...")
-    M = self_inductance_matrix(mesh_3d, quad_degree=2)
+    try:
+        M = self_inductance_matrix(mesh, quad_degree=2)
+    except MemoryError:
+        msg = "\n".join(
+            [
+                "ERROR: out of memory",
+                f"  {n_faces} faces, {n_verts} vertices",
+                "",
+                "Not enough RAM for self-inductance matrix.",
+                "Try a shorter or simpler path between the pads.",
+            ]
+        )
+        debug_print(f"[calc_inductance] {msg}")
+        return {"inductance": None, "segments": segments, "message": msg}
     L = float(psi @ M @ psi)
     debug_print(f"[calc_inductance] L = {L * 1e9:.2f} nH")
 
@@ -212,14 +314,23 @@ def _compute_inductance(segments, debug_print=None):
         f"Loop inductance: {L * 1e9:.2f} nH",
         "",
         path_summary,
-        f"  loop closure gap: {gap * 1e3:.2f} mm",
-        f"  mesh: {len(mesh_flat.vertices)} vertices, {len(mesh_flat.faces)} faces",
+        "",
+        "Simulation model:",
+        f"  Loop closed with {gap * 1e3:.2f} mm straight return path",
+        f"  Mesh: {n_faces} triangles (max {_MAX_MESH_FACES}), {n_layers} layers",
         "",
         "Segments:",
     ]
     lines.extend(segment_lines)
 
-    return {"inductance": L, "segments": segments, "message": "\n".join(lines)}
+    result = {"inductance": L, "segments": segments, "message": "\n".join(lines)}
+    if debug >= 1:
+        result["_debug_data"] = {
+            "centerline": centerline,
+            "mesh_vertices": mesh.vertices,
+            "mesh_faces": mesh.faces,
+        }
+    return result
 
 
 # =========================================================================
@@ -227,25 +338,158 @@ def _compute_inductance(segments, debug_print=None):
 # =========================================================================
 
 
-def _build_centerline(segments):
-    """Build ordered 2D centerline and z per segment from path segments.
+def _arc_points(start, end, mid, width=0.0):
+    """Interpolate points along a circular arc defined by start, mid, end.
+
+    Uses the three-point circle formula to find center and radius,
+    then adaptively samples points so that the maximum chord error
+    (sagitta) of each sub-arc stays below *width*/4 (clamped to
+    [2, 64] points).  For nearly-straight arcs this produces very
+    few points; for tight bends it produces many.
+
+    Returns list of (x, y) tuples (excluding *start*, including *end*).
+    """
+    sx, sy = start
+    mx, my = mid
+    ex, ey = end
+
+    # Three-point circle: find circumcenter
+    ax, ay = sx, sy
+    bx, by = mx, my
+    cx, cy = ex, ey
+    D = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by))
+    if abs(D) < 1e-30:
+        # Degenerate (collinear) – fall back to straight line
+        return [(ex, ey)]
+
+    ux = (
+        (ax * ax + ay * ay) * (by - cy)
+        + (bx * bx + by * by) * (cy - ay)
+        + (cx * cx + cy * cy) * (ay - by)
+    ) / D
+    uy = (
+        (ax * ax + ay * ay) * (cx - bx)
+        + (bx * bx + by * by) * (ax - cx)
+        + (cx * cx + cy * cy) * (bx - ax)
+    ) / D
+
+    r = math.hypot(sx - ux, sy - uy)
+
+    # Angles of start, mid, end relative to center
+    a_start = math.atan2(sy - uy, sx - ux)
+    a_mid = math.atan2(my - uy, mx - ux)
+    a_end = math.atan2(ey - uy, ex - ux)
+
+    # Determine arc direction (CW or CCW) so that mid is between start and end
+    def _normalize(a, ref):
+        """Normalize angle *a* into [ref, ref+2pi)."""
+        while a < ref:
+            a += 2 * math.pi
+        while a >= ref + 2 * math.pi:
+            a -= 2 * math.pi
+        return a
+
+    # Try CCW (positive) direction
+    a_mid_ccw = _normalize(a_mid, a_start)
+    a_end_ccw = _normalize(a_end, a_start)
+    if a_mid_ccw < a_end_ccw:
+        sweep = a_end_ccw - a_start
+    else:
+        # CW sweep – use negative direction
+        a_start_cw = _normalize(a_start, a_end)
+        sweep = -(a_start_cw - a_end)
+
+    # Adaptive point count based on chord error tolerance.
+    # Sagitta of a sub-arc with half-angle alpha: s = r*(1 - cos(alpha)).
+    # We want s <= tol, so alpha <= arccos(1 - tol/r).
+    # n_points = ceil(|sweep| / (2*alpha)).
+    tol = max(width / 4, 1e-7) if width > 0 else r * 0.01
+    ratio = tol / r if r > 0 else 1.0
+    if ratio >= 1.0:
+        n_points = 2
+    else:
+        max_sub_angle = 2 * math.acos(1 - ratio)
+        n_points = math.ceil(abs(sweep) / max_sub_angle)
+    n_points = max(2, min(n_points, 64))
+
+    points = []
+    for i in range(1, n_points + 1):
+        t = i / n_points
+        angle = a_start + sweep * t
+        points.append((ux + r * math.cos(angle), uy + r * math.sin(angle)))
+
+    return points
+
+
+def _build_centerline(segments, debug_print=None):
+    """Build ordered 3D centerline from path segments.
+
+    VIAs produce two points at the same (x,y) with z_from and z_to,
+    creating a vertical strip segment in the mesh.
 
     Returns
     -------
-    centerline_xy : list of (x, y) tuples in meters (not yet closed)
-    z_per_seg : list of z-values, one per centerline segment
+    centerline : list of (x, y, z) tuples in meters (not yet closed)
+    width_per_seg : list of widths (m), one per centerline segment
     """
-    centerline_xy = []
-    z_per_seg = []
+    centerline = []
+    width_per_seg = []
+    last_width = 0.0
+    current_z = None
+
+    # Pre-scan: find the first wire width as fallback
+    for seg in segments:
+        if seg["type"] == "WIRE" and seg.get("width", 0.0) > 0:
+            last_width = seg["width"]
+            break
 
     for seg in segments:
         if seg["type"] == "VIA":
-            # VIA doesn't add xy extent, just a z-transition
+            pos = tuple(seg["position"])
+            via_width = _neighbor_width(seg, segments, last_width)
+
+            # Determine VIA direction based on current_z
+            z_top, z_bot = seg["z_top"], seg["z_bot"]
+            if current_z is not None:
+                if abs(current_z - z_top) < abs(current_z - z_bot):
+                    z_from, z_to = z_top, z_bot
+                else:
+                    z_from, z_to = z_bot, z_top
+            else:
+                z_from, z_to = z_top, z_bot
+
+            if centerline:
+                last_xy = np.array(centerline[-1][:2])
+                gap = np.linalg.norm(np.array(pos) - last_xy)
+                if gap > 1e-6:
+                    # Bridge to VIA position at z_from
+                    centerline.append((pos[0], pos[1], z_from))
+                    width_per_seg.append(via_width)
+                # Add VIA endpoint at z_to
+                centerline.append((pos[0], pos[1], z_to))
+                width_per_seg.append(via_width)
+            else:
+                centerline.append((pos[0], pos[1], z_from))
+                centerline.append((pos[0], pos[1], z_to))
+                width_per_seg.append(via_width)
+
+            current_z = z_to
             continue
 
         if seg["type"] != "WIRE":
             continue
 
+        w = seg.get("width", 0.0)
+        if w <= 0:
+            if debug_print:
+                debug_print(
+                    f"[calc_inductance] Skipping WIRE with width=0 "
+                    f"(id={seg.get('id', '?')})"
+                )
+            continue
+
+        last_width = w
+        z = seg["z"]
         s = np.array(seg["start"])
         e = np.array(seg["end"])
 
@@ -255,68 +499,196 @@ def _build_centerline(segments):
         else:
             entry, exit_ = e, s
 
-        if not centerline_xy:
-            centerline_xy.append(tuple(entry))
-        centerline_xy.append(tuple(exit_))
-        z_per_seg.append(seg["z"])
+        if not centerline:
+            centerline.append((entry[0], entry[1], z))
+            current_z = z
+        else:
+            last_xy = np.array(centerline[-1][:2])
+            gap = np.linalg.norm(entry - last_xy)
+            if gap > 1e-6:
+                if debug_print:
+                    debug_print(
+                        f"[calc_inductance] WARNING: gap of {gap * 1e3:.3f} mm "
+                        f"between centerline end "
+                        f"({last_xy[0] * 1e3:.2f},{last_xy[1] * 1e3:.2f}) "
+                        f"and next segment entry "
+                        f"({entry[0] * 1e3:.2f},{entry[1] * 1e3:.2f}) "
+                        f"– inserting bridge (w={w * 1e3:.2f} mm)"
+                    )
+                centerline.append((entry[0], entry[1], z))
+                width_per_seg.append(w)
 
-    return centerline_xy, z_per_seg
+        mid = seg.get("mid")
+        if mid is not None:
+            arc_pts = _arc_points(tuple(entry), tuple(exit_), mid, width=w)
+            for pt in arc_pts:
+                centerline.append((pt[0], pt[1], z))
+            width_per_seg.extend([w] * len(arc_pts))
+        else:
+            centerline.append((exit_[0], exit_[1], z))
+            width_per_seg.append(w)
+
+        current_z = z
+
+    return centerline, width_per_seg
+
+
+def _neighbor_width(via_seg, segments, fallback):
+    """Get bridge width for a VIA from its neighboring WIRE segments."""
+    idx = segments.index(via_seg)
+    widths = []
+    # Look at previous segment
+    if idx > 0 and segments[idx - 1]["type"] == "WIRE":
+        w = segments[idx - 1].get("width", 0.0)
+        if w > 0:
+            widths.append(w)
+    # Look at next segment
+    if idx < len(segments) - 1 and segments[idx + 1]["type"] == "WIRE":
+        w = segments[idx + 1].get("width", 0.0)
+        if w > 0:
+            widths.append(w)
+    return min(widths) if widths else fallback
 
 
 # =========================================================================
-# Mesh helpers (adapted from test/test_bfieldtools_coil.py)
+# Strip mesh builder
 # =========================================================================
 
 
-def _trace_path_to_mesh(path_xy_mm, trace_width_mm, max_tri_area_mm2=0.02):
-    """Triangulated 3D mesh from a closed trace center-line.
+def _build_strip_mesh(
+    centerline, width_per_seg, max_faces=_MESH_TARGET_FACES, n_width=4, debug_print=None
+):
+    """Build a 3D strip mesh from a closed centerline.
+
+    The mesh is a quad-strip (split into triangles) that follows the 3D
+    centerline.  Each layer segment gets its correct z immediately — no
+    2D projection or z-warping needed.
 
     Parameters
     ----------
-    path_xy_mm : (N, 2) array – closed center-line in mm (first == last point).
-    trace_width_mm : float – trace width in mm.
-    max_tri_area_mm2 : float – max triangle area for meshing (mm²).
+    centerline : (N, 3) array – closed center-line in meters (first == last).
+    width_per_seg : (N-1,) array – trace width per segment in meters.
+    max_faces : int – target maximum faces (subdivide long segments to reach it).
+    n_width : int – number of quads across the strip width.
+    debug_print : callable, optional
 
     Returns
     -------
-    trimesh.Trimesh in meters (z = 0).
+    trimesh.Trimesh – 3D mesh in meters with ring topology (2 boundaries).
     """
-    line = LineString(path_xy_mm)
-    poly = line.buffer(trace_width_mm / 2, cap_style="flat", join_style="mitre")
+    _dp = debug_print or (lambda *a: None)
+    pts = np.array(centerline)
+    n_pts = len(pts)
+    if n_pts < 3:
+        raise ValueError(f"Need >= 3 centerline points, got {n_pts}")
 
-    outer_coords = np.array(poly.exterior.coords[:-1])
-    inner_coords = np.array(poly.interiors[0].coords[:-1])
-    n_outer, n_inner = len(outer_coords), len(inner_coords)
+    # The centerline is closed (first == last), so we have n_pts-1 segments.
+    # Remove the duplicate closing point for processing; we'll wrap around.
+    if np.allclose(pts[0], pts[-1]):
+        pts = pts[:-1]
+    n_pts = len(pts)
+    widths = np.array(width_per_seg[:n_pts])
+    if len(widths) < n_pts:
+        widths = np.pad(widths, (0, n_pts - len(widths)), constant_values=widths[-1])
 
-    vertices = np.vstack([outer_coords, inner_coords])
-    outer_seg = np.array([[i, (i + 1) % n_outer] for i in range(n_outer)])
-    inner_seg = np.array(
-        [[n_outer + i, n_outer + (i + 1) % n_inner] for i in range(n_inner)]
+    # --- Subdivide long segments to reach target face count ---
+    # Each quad = 2 faces, n_width quads across => 2*n_width faces per ring row
+    # We want total faces <= max_faces => n_rows <= max_faces / (2*n_width)
+    max_rows = max_faces // (2 * n_width)
+
+    diffs = np.diff(np.vstack([pts, pts[0:1]]), axis=0)
+    seg_lens_xy = np.linalg.norm(diffs[:, :2], axis=1)
+    # Total length only counts xy-distance (VIA segments have zero xy-length)
+    total_xy_len = seg_lens_xy.sum()
+    if total_xy_len < 1e-15:
+        raise ValueError("Centerline has zero xy-length")
+
+    # Subdivide each segment proportionally (skip VIA segments with zero xy-len)
+    new_pts = []
+    new_widths = []
+    # Reserve one row per VIA segment
+    n_via_segs = np.sum(seg_lens_xy < 1e-15)
+    target_rows = max(n_pts, max_rows - int(n_via_segs))
+    for i in range(n_pts):
+        j = (i + 1) % n_pts
+        if seg_lens_xy[i] < 1e-15:
+            # VIA segment — keep as single segment, don't subdivide
+            new_pts.append(pts[i].copy())
+            new_widths.append(widths[i])
+        else:
+            n_sub = max(1, int(target_rows * seg_lens_xy[i] / total_xy_len))
+            for k in range(n_sub):
+                t = k / n_sub
+                new_pts.append(pts[i] * (1 - t) + pts[j] * t)
+                new_widths.append(widths[i] * (1 - t) + widths[j] * t)
+
+    pts = np.array(new_pts)
+    widths = np.array(new_widths)
+    n_pts = len(pts)
+
+    _dp(
+        f"[calc_inductance] Strip mesh: {n_pts} centerline points, "
+        f"{n_width} width quads"
     )
-    seg_arr = np.vstack([outer_seg, inner_seg])
 
-    centroid = (
-        np.mean(path_xy_mm[:-1], axis=0)
-        if hasattr(path_xy_mm, "__len__")
-        else np.mean(np.array(path_xy_mm)[:-1], axis=0)
-    )
-    if isinstance(centroid, np.ndarray) and centroid.ndim == 1:
-        centroid = centroid.reshape(1, -1)
-    else:
-        centroid = np.array([centroid])
+    # --- Compute per-point normals perpendicular to path in xy-plane ---
+    # Use averaged incoming+outgoing tangent normals to avoid degeneracy at corners
+    seg_normals = np.zeros((n_pts, 3))
+    for i in range(n_pts):
+        j = (i + 1) % n_pts
+        d = pts[j] - pts[i]
+        dxy = math.hypot(d[0], d[1])
+        if dxy > 1e-15:
+            seg_normals[i] = np.array([-d[1] / dxy, d[0] / dxy, 0.0])
 
-    tri_input = {"vertices": vertices, "segments": seg_arr, "holes": centroid}
-    tri_result = tr.triangulate(tri_input, f"pq30a{max_tri_area_mm2}")
+    # Average incoming and outgoing normals at each vertex
+    normals = np.zeros((n_pts, 3))
+    last_valid = np.array([1.0, 0.0, 0.0])
+    for i in range(n_pts):
+        prev = (i - 1) % n_pts
+        n_in = seg_normals[prev]
+        n_out = seg_normals[i]
+        has_in = np.linalg.norm(n_in) > 0.5
+        has_out = np.linalg.norm(n_out) > 0.5
+        if has_in and has_out:
+            avg = n_in + n_out
+            length = np.linalg.norm(avg)
+            normals[i] = avg / length if length > 1e-15 else n_out
+        elif has_out:
+            normals[i] = n_out
+        elif has_in:
+            normals[i] = n_in
+        else:
+            normals[i] = last_valid
+        last_valid = normals[i]
 
-    verts_3d = np.column_stack(
-        [
-            tri_result["vertices"] * 1e-3,
-            np.zeros(len(tri_result["vertices"])),
-        ]
-    )
-    return trimesh.Trimesh(
-        vertices=verts_3d, faces=tri_result["triangles"], process=False
-    )
+    # --- Build vertex grid: n_pts × (n_width+1) ---
+    n_cols = n_width + 1
+    verts = np.zeros((n_pts * n_cols, 3))
+    for i in range(n_pts):
+        half_w = widths[i] / 2
+        for c in range(n_cols):
+            offset = -half_w + c * (widths[i] / n_width)
+            verts[i * n_cols + c] = pts[i] + offset * normals[i]
+
+    # --- Build faces: 2 triangles per quad ---
+    faces = []
+    for i in range(n_pts):
+        j = (i + 1) % n_pts
+        for c in range(n_width):
+            v00 = i * n_cols + c
+            v01 = i * n_cols + c + 1
+            v10 = j * n_cols + c
+            v11 = j * n_cols + c + 1
+            faces.append([v00, v10, v01])
+            faces.append([v01, v10, v11])
+
+    faces = np.array(faces)
+    n_faces = len(faces)
+    _dp(f"[calc_inductance] Strip mesh: {len(verts)} vertices, {n_faces} faces")
+
+    mesh = trimesh.Trimesh(vertices=verts, faces=faces, process=False)
+    return mesh
 
 
 def _build_stream_function(mesh):
@@ -326,7 +698,8 @@ def _build_stream_function(mesh):
     L = psi^T @ M @ psi  (I = 1 A).
     """
     boundaries, inner_verts = find_mesh_boundaries(mesh)
-    assert len(boundaries) == 2, f"Expected ring (2 boundaries), got {len(boundaries)}"
+    if len(boundaries) != 2:
+        raise ValueError(f"Expected ring mesh with 2 boundaries, got {len(boundaries)}")
 
     if len(boundaries[0]) >= len(boundaries[1]):
         outer_bnd, inner_bnd = boundaries[0], boundaries[1]
@@ -343,85 +716,6 @@ def _build_stream_function(mesh):
         psi[inner_verts] = d_out / (d_out + d_in)
 
     return psi
-
-
-def _compute_arc_params(verts_xy_m, path_xy_m):
-    """Map each mesh vertex to arc-length parameter t in [0, 1)."""
-    path = np.array(path_xy_m)
-    if np.allclose(path[0], path[-1]):
-        path = path[:-1]
-    n_seg = len(path)
-
-    p0s = path
-    p1s = np.roll(path, -1, axis=0)
-    ds = p1s - p0s
-    seg_lens = np.linalg.norm(ds, axis=1)
-    cum_len = np.concatenate([[0], np.cumsum(seg_lens)])
-    total_len = cum_len[-1]
-
-    t_out = np.zeros(len(verts_xy_m))
-    for vi, pt in enumerate(verts_xy_m):
-        best_dist = np.inf
-        best_t = 0.0
-        for si in range(n_seg):
-            if seg_lens[si] == 0:
-                continue
-            u = np.clip(np.dot(pt - p0s[si], ds[si]) / seg_lens[si] ** 2, 0, 1)
-            proj = p0s[si] + u * ds[si]
-            dist = np.linalg.norm(pt - proj)
-            if dist < best_dist:
-                best_dist = dist
-                best_t = (cum_len[si] + u * seg_lens[si]) / total_len
-        t_out[vi] = best_t
-
-    return t_out
-
-
-def _assign_z_from_segments(mesh_flat, t_params, centerline_m, z_per_seg):
-    """Assign z-height to mesh vertices based on arc-length parameter.
-
-    Each centerline segment [i]→[i+1] covers an arc-length range and has z_per_seg[i].
-    Vertices in that range get that z-height. Via transitions are smoothed.
-    """
-    path = np.array(centerline_m)
-    if np.allclose(path[0], path[-1]):
-        path = path[:-1]
-    n_seg = len(path)
-
-    seg_lens = np.linalg.norm(np.diff(np.vstack([path, path[0:1]]), axis=0), axis=1)
-    cum_len = np.concatenate([[0], np.cumsum(seg_lens)])
-    total_len = cum_len[-1]
-
-    # t-boundaries for each centerline segment
-    t_bounds = cum_len / total_len  # [0, t1, t2, ..., 1.0]
-
-    z_arr = np.zeros(len(t_params))
-    via_hw = 0.01  # half-width for via transition smoothing (in t units)
-
-    for vi, t in enumerate(t_params):
-        # Find which segment this t belongs to
-        seg_idx = min(np.searchsorted(t_bounds[1:], t), n_seg - 1)
-        z_arr[vi] = z_per_seg[seg_idx]
-
-        # Smooth z-transitions at interior segment boundaries
-        if seg_idx > 0 and z_per_seg[seg_idx] != z_per_seg[seg_idx - 1]:
-            t_boundary = t_bounds[seg_idx]
-            if abs(t - t_boundary) < via_hw:
-                u = np.clip((t - (t_boundary - via_hw)) / (2 * via_hw), 0, 1)
-                z_arr[vi] = z_per_seg[seg_idx - 1] * (1 - u) + z_per_seg[seg_idx] * u
-
-        # Smooth wrap-around transition (last segment ↔ first segment)
-        if z_per_seg[-1] != z_per_seg[0]:
-            if t > 1.0 - via_hw:
-                u = np.clip((t - (1.0 - via_hw)) / via_hw, 0, 1)
-                z_arr[vi] = z_per_seg[-1] * (1 - u) + z_per_seg[0] * u
-            elif t < via_hw:
-                u = np.clip(t / via_hw, 0, 1)
-                z_arr[vi] = z_per_seg[0] * u + z_per_seg[-1] * (1 - u)
-
-    new_verts = mesh_flat.vertices.copy()
-    new_verts[:, 2] = z_arr
-    return trimesh.Trimesh(vertices=new_verts, faces=mesh_flat.faces, process=False)
 
 
 # =========================================================================
@@ -461,7 +755,7 @@ def _format_segments(segments):
         f"{total_wire_length * 1e3:.2f} mm, "
         f"layers: {', '.join(sorted(layers_used))}"
     )
-    return lines, summary
+    return lines, summary, len(layers_used)
 
 
 # =========================================================================

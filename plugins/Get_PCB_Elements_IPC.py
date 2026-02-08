@@ -98,6 +98,58 @@ def _obj_id(obj):
     return obj.id.value
 
 
+def _arc_geometry(start, end, mid):
+    """Compute arc radius, sweep angle and arc length from three points (m).
+
+    Returns (radius, angle, arc_length) where angle is the signed sweep
+    in radians (positive = CCW, negative = CW).
+    Falls back to (None, 0, chord) if the three points are collinear.
+    """
+    sx, sy = start
+    mx, my = mid
+    ex, ey = end
+    D = 2 * (sx * (my - ey) + mx * (ey - sy) + ex * (sy - my))
+    if abs(D) < 1e-30:
+        # Collinear
+        chord = math.hypot(ex - sx, ey - sy)
+        return None, 0.0, chord
+
+    ux = (
+        (sx * sx + sy * sy) * (my - ey)
+        + (mx * mx + my * my) * (ey - sy)
+        + (ex * ex + ey * ey) * (sy - my)
+    ) / D
+    uy = (
+        (sx * sx + sy * sy) * (ex - mx)
+        + (mx * mx + my * my) * (sx - ex)
+        + (ex * ex + ey * ey) * (mx - sx)
+    ) / D
+
+    r = math.hypot(sx - ux, sy - uy)
+
+    a_start = math.atan2(sy - uy, sx - ux)
+    a_mid = math.atan2(my - uy, mx - ux)
+    a_end = math.atan2(ey - uy, ex - ux)
+
+    def _norm(a, ref):
+        while a < ref:
+            a += 2 * math.pi
+        while a >= ref + 2 * math.pi:
+            a -= 2 * math.pi
+        return a
+
+    a_mid_ccw = _norm(a_mid, a_start)
+    a_end_ccw = _norm(a_end, a_start)
+    if a_mid_ccw < a_end_ccw:
+        sweep = a_end_ccw - a_start
+    else:
+        a_start_cw = _norm(a_start, a_end)
+        sweep = -(a_start_cw - a_end)
+
+    arc_length = abs(sweep) * r
+    return r, sweep, arc_length
+
+
 def _cu_layers(layers, enabled_layers=None):
     """Filter to copper layers and convert to v9 ints."""
     result = []
@@ -218,32 +270,16 @@ def _collect_footprint_shapes(fp, enabled_layers):
             start = _pos_m(shape.start)
             end = _pos_m(shape.end)
             mid = _pos_m(shape.mid)
-            dx = end[0] - start[0]
-            dy = end[1] - start[1]
-            chord = math.sqrt(dx * dx + dy * dy)
-            r = shape.radius()
-            if r is not None:
-                r_m = _to_m(r)
-                if chord <= 2 * r_m and r_m > 0:
-                    half_angle = math.asin(chord / (2 * r_m))
-                    mid_chord_x = (start[0] + end[0]) / 2
-                    mid_chord_y = (start[1] + end[1]) / 2
-                    d_mid = math.hypot(mid[0] - mid_chord_x, mid[1] - mid_chord_y)
-                    if d_mid > r_m:
-                        arc_length = 2 * r_m * (math.pi - half_angle)
-                    else:
-                        arc_length = 2 * r_m * half_angle
-                else:
-                    arc_length = chord
-            else:
-                arc_length = chord
+            r_m, angle, arc_length = _arc_geometry(start, end, mid)
             if arc_length == 0:
                 continue
-            items[oid] = {
+            item = {
                 "type": "WIRE",
                 "id": oid,
                 "start": start,
                 "end": end,
+                "mid": mid,
+                "angle": angle,
                 "width": width,
                 "length": arc_length,
                 "area": width * arc_length,
@@ -254,6 +290,9 @@ def _collect_footprint_shapes(fp, enabled_layers):
                 "conn_start": [],
                 "conn_end": [],
             }
+            if r_m is not None:
+                item["radius"] = r_m
+            items[oid] = item
 
     return items
 
@@ -334,28 +373,14 @@ def Get_PCB_Elements_IPC(board: Board):
         }
 
         if isinstance(track, ArcTrack):
-            r = track.radius()
-            if r is not None:
-                r_m = _to_m(r)
+            mid = _pos_m(track.mid)
+            r_m, angle, arc_length = _arc_geometry(start, end, mid)
+            temp["mid"] = mid
+            temp["angle"] = angle
+            temp["length"] = arc_length
+            temp["area"] = width * arc_length
+            if r_m is not None:
                 temp["radius"] = r_m
-                # Arc length using mid point to determine if major or minor arc
-                chord = length
-                if chord <= 2 * r_m and r_m > 0:
-                    half_angle = math.asin(chord / (2 * r_m))
-                    # Check if mid point is on the minor arc side
-                    mid = _pos_m(track.mid)
-                    sx, sy = start
-                    ex, ey = end
-                    mid_chord_x = (sx + ex) / 2
-                    mid_chord_y = (sy + ey) / 2
-                    d_mid = math.hypot(mid[0] - mid_chord_x, mid[1] - mid_chord_y)
-                    # If mid is far from chord midpoint, it's a major arc (>180°)
-                    if d_mid > r_m:
-                        arc_length = 2 * r_m * (math.pi - half_angle)
-                    else:
-                        arc_length = 2 * r_m * half_angle
-                    temp["length"] = arc_length
-                    temp["area"] = width * arc_length
 
         ItemList[oid] = temp
 
