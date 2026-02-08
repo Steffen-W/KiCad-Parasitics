@@ -211,7 +211,7 @@ def show_debug_plots(debug_data, segments):
     ax2.set_xlabel("mm")
     ax2.set_ylabel("mm")
 
-    plt.show()
+    plt.show(block=False)
 
 
 # =========================================================================
