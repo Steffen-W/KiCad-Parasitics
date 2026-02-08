@@ -3,6 +3,7 @@ from pathlib import Path
 import pcbnew
 
 from .Get_PCB_Elements import Get_PCB_Elements
+from .Get_PCB_Stackup import Get_PCB_Stackup_fun
 from .parasitic import run_plugin
 
 
@@ -28,8 +29,9 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
 
         board_FileName = Path(board.GetFileName())
         ItemList, _BoardThickness = Get_PCB_Elements(board, connect)
+        CuStack = Get_PCB_Stackup_fun(board_FileName, new_v9=new_v9)
 
-        run_plugin(self.plugin_path, ItemList, board_FileName, new_v9)
+        run_plugin(ItemList, CuStack)
 
 
 KiCadPluginParasitic().register()

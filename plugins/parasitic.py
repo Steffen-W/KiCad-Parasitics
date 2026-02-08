@@ -22,12 +22,10 @@ if venv:
 
 try:
     from .Connect_Nets import Connect_Nets
-    from .Get_PCB_Stackup import Get_PCB_Stackup_fun
     from .Get_Parasitic import extract_network, find_path, simulate_network
     from .network_display import format_network_info
 except ImportError:
     from Connect_Nets import Connect_Nets
-    from Get_PCB_Stackup import Get_PCB_Stackup_fun
     from Get_Parasitic import extract_network, find_path, simulate_network
     from network_display import format_network_info
 
@@ -427,8 +425,9 @@ def SaveDictToFile(dict_name, filename):
         f.write("}")
 
 
-def run_plugin(plugin_path, ItemList, board_FileName, new_v9):
+def run_plugin(ItemList, CuStack):
     try:
+        plugin_path = os.path.dirname(os.path.abspath(__file__))
         debug = 0
         debug_log_file = None
         if debug:
@@ -455,11 +454,8 @@ def run_plugin(plugin_path, ItemList, board_FileName, new_v9):
         if debug:
             save_file = os.path.join(plugin_path, "ItemList.py")
             SaveDictToFile(ItemList, save_file)
-            with open(save_file, "a") as f:
-                f.write(f'\nboard_FileName = "{board_FileName}"')
 
         data = Connect_Nets(ItemList)
-        CuStack = Get_PCB_Stackup_fun(board_FileName, new_v9=new_v9)
 
         # Get selected elements
         Selected = [d for d in data.values() if d["is_selected"]]
@@ -548,16 +544,16 @@ if __name__ == "__main__":
             print("Error: No PCB board found. Is a board open in KiCad?")
             sys.exit(1)
         board_FileName = board.document.board_filename
-        plugin_path = os.path.dirname(os.path.abspath(__file__))
-
-        logging.info(f"Board: {board_FileName}")
+        logging.info(f"Board: {board.document.board_filename}")
 
         from Get_PCB_Elements_IPC import Get_PCB_Elements_IPC
+        from Get_PCB_Stackup_IPC import Get_PCB_Stackup_IPC
 
         ItemList = Get_PCB_Elements_IPC(board)
         logging.info("Got %d elements from IPC API", len(ItemList))
 
-        run_plugin(plugin_path, ItemList, board_FileName, new_v9=True)
+        CuStack = Get_PCB_Stackup_IPC(board)
+        run_plugin(ItemList, CuStack)
     except errors.ConnectionError:
         logging.exception("ConnectionError")
         print("ConnectionError: Failed to connect to KiCad. Is KiCad running?")
