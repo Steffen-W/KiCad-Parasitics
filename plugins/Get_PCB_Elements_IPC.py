@@ -567,6 +567,16 @@ def _point_to_segment_dist_sq(px, py, ax, ay, bx, by):
     return dx2 * dx2 + dy2 * dy2
 
 
+def _segments_dist_sq(ax, ay, bx, by, cx, cy, dx, dy):
+    """Squared distance between segment (a,b) and segment (c,d)."""
+    return min(
+        _point_to_segment_dist_sq(ax, ay, cx, cy, dx, dy),
+        _point_to_segment_dist_sq(bx, by, cx, cy, dx, dy),
+        _point_to_segment_dist_sq(cx, cy, ax, ay, bx, by),
+        _point_to_segment_dist_sq(dx, dy, ax, ay, bx, by),
+    )
+
+
 def _point_near_polygon(point, polygon, margin):
     """Check if point is inside polygon or within margin of its edges."""
     if _point_in_polygon(point, polygon):
@@ -668,10 +678,21 @@ def _build_connectivity(ItemList):
     - Point-in-pad: shape-aware test (circle/rect/oval)
     - Point-in-zone: ray casting with margin
     """
-    # Compute bounding boxes for all elements
+    # Pre-compute bounding boxes and layer sets for all elements
     bboxes = {}
+    layer_sets = {}
     for oid, d in ItemList.items():
         bboxes[oid] = _compute_bbox(d)
+        layer_sets[oid] = set(d.get("layer", []))
+
+    # Categorize elements
+    wires = {oid: d for oid, d in ItemList.items() if d["type"] == "WIRE"}
+    pads = {oid: d for oid, d in ItemList.items() if d["type"] == "PAD"}
+    zones = {
+        oid: d
+        for oid, d in ItemList.items()
+        if d["type"] == "ZONE" and len(d.get("_outline", [])) >= 3
+    }
 
     # Collect connection points: (position, oid, endpoint_type, radius)
     points = []
@@ -716,42 +737,105 @@ def _build_connectivity(ItemList):
             _add_conn(oid_i, ep_i, oid_j, ep_j)
 
     # Pad connectivity: check if wire endpoints lie within pad shape
-    pads = {oid: d for oid, d in ItemList.items() if d["type"] == "PAD"}
-
     for pad_oid, pad_d in pads.items():
         pad_bbox = bboxes[pad_oid]
-        pad_layers = set(pad_d["layer"])
+        pad_ls = layer_sets[pad_oid]
         for pos, pt_oid, ep, r in points:
             if pt_oid == pad_oid:
                 continue
-            if pad_oid in ItemList[pt_oid].get(
-                "conn_start" if ep in ("start", "position") else "conn_end", []
-            ):
-                continue  # already connected
-            pt_layers = set(ItemList[pt_oid].get("layer", []))
-            if not pad_layers & pt_layers:
+            conn_key = "conn_start" if ep in ("start", "position") else "conn_end"
+            if pad_oid in ItemList[pt_oid].get(conn_key, []):
                 continue
-            # Quick bbox check: expand pad bbox by wire radius
+            if not pad_ls & layer_sets[pt_oid]:
+                continue
             pt_bbox = (pos[0] - r, pos[1] - r, pos[0] + r, pos[1] + r)
             if not _bboxes_overlap(pad_bbox, pt_bbox):
                 continue
             if _point_in_pad(pos, pad_d, margin=r):
                 _add_conn(pt_oid, ep, pad_oid, "position")
 
-    # Zone connectivity: check if endpoints lie inside zone outlines
-    zones = {
-        oid: d
-        for oid, d in ItemList.items()
-        if d["type"] == "ZONE" and len(d.get("_outline", [])) >= 3
-    }
+    # Wire-body connectivity: T-junctions, wire-through-pad, wire-through-zone
+    for wire_oid, wire_d in wires.items():
+        wire_bbox = bboxes[wire_oid]
+        wire_ls = layer_sets[wire_oid]
+        wr = wire_d.get("width", 0) / 2
+        sx, sy = wire_d["start"]
+        ex, ey = wire_d["end"]
 
+        # T-junction: points landing on this wire's body
+        for pos, pt_oid, ep, r in points:
+            if pt_oid == wire_oid:
+                continue
+            conn_key = "conn_start" if ep in ("start", "position") else "conn_end"
+            if wire_oid in ItemList[pt_oid].get(conn_key, []):
+                continue
+            if not wire_ls & layer_sets[pt_oid]:
+                continue
+            pt_bbox = (pos[0] - r, pos[1] - r, pos[0] + r, pos[1] + r)
+            if not _bboxes_overlap(wire_bbox, pt_bbox):
+                continue
+            thr = (wr + r) ** 2
+            if _point_to_segment_dist_sq(pos[0], pos[1], sx, sy, ex, ey) <= thr:
+                ds = (pos[0] - sx) ** 2 + (pos[1] - sy) ** 2
+                de = (pos[0] - ex) ** 2 + (pos[1] - ey) ** 2
+                wire_ep = "start" if ds <= de else "end"
+                _add_conn(pt_oid, ep, wire_oid, wire_ep)
+
+        # Wire-through-pad: wire body crosses pad without endpoint nearby
+        for pad_oid, pad_d in pads.items():
+            if pad_oid in wire_d["conn_start"] or pad_oid in wire_d["conn_end"]:
+                continue
+            if not wire_ls & layer_sets[pad_oid]:
+                continue
+            if not _bboxes_overlap(wire_bbox, bboxes[pad_oid]):
+                continue
+            px, py = pad_d["position"]
+            pad_sx, pad_sy = pad_d.get("size", (0, 0))
+            pad_r = max(pad_sx, pad_sy) / 2
+            thr = (wr + pad_r) ** 2
+            if _point_to_segment_dist_sq(px, py, sx, sy, ex, ey) <= thr:
+                ds = (sx - px) ** 2 + (sy - py) ** 2
+                de = (ex - px) ** 2 + (ey - py) ** 2
+                wire_ep = "start" if ds <= de else "end"
+                _add_conn(wire_oid, wire_ep, pad_oid, "position")
+
+        # Wire-through-zone: wire body crosses zone without endpoint inside
+        for zone_oid, zone_d in zones.items():
+            if zone_oid in wire_d["conn_start"] or zone_oid in wire_d["conn_end"]:
+                continue
+            if not wire_ls & layer_sets[zone_oid]:
+                continue
+            if not _bboxes_overlap(wire_bbox, bboxes[zone_oid]):
+                continue
+            outline = zone_d["_outline"]
+            n = len(outline)
+            thr = wr * wr
+            hit = False
+            for i in range(n):
+                ox, oy = outline[i]
+                px, py = outline[(i + 1) % n]
+                if _segments_dist_sq(sx, sy, ex, ey, ox, oy, px, py) <= thr:
+                    hit = True
+                    break
+            if hit:
+                zx = sum(p[0] for p in outline) / n
+                zy = sum(p[1] for p in outline) / n
+                ds = (sx - zx) ** 2 + (sy - zy) ** 2
+                de = (ex - zx) ** 2 + (ey - zy) ** 2
+                wire_ep = "start" if ds <= de else "end"
+                conn_key = "conn_start" if wire_ep == "start" else "conn_end"
+                if zone_oid not in wire_d[conn_key]:
+                    wire_d[conn_key].append(zone_oid)
+                if wire_oid not in zone_d["conn_start"]:
+                    zone_d["conn_start"].append(wire_oid)
+
+    # Zone connectivity: check if endpoints lie inside zone outlines
     for zone_oid, zone_d in zones.items():
         outline = zone_d["_outline"]
         zone_bbox = bboxes[zone_oid]
-        zone_layers = set(zone_d["layer"])
+        zone_ls = layer_sets[zone_oid]
         for pos, pt_oid, ep, r in points:
-            pt_layers = set(ItemList[pt_oid].get("layer", []))
-            if not zone_layers & pt_layers:
+            if not zone_ls & layer_sets[pt_oid]:
                 continue
             pt_bbox = (pos[0] - r, pos[1] - r, pos[0] + r, pos[1] + r)
             if not _bboxes_overlap(zone_bbox, pt_bbox):

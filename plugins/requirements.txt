@@ -3,7 +3,5 @@ numpy
 matplotlib
 wxPython
 bfieldtools
-shapely
-triangle
 trimesh
-scipy<1.14
+scipy
