@@ -318,13 +318,13 @@ def Get_shortest_path_RES(path, resistors):
     return RES
 
 
-def extract_network(data, CuStack, netcode, debug=0, debug_print=None):
+def extract_network(data, CuStack, netcode=None, debug=0, debug_print=None):
     """Extract electrical network from PCB data (DC resistances only).
 
     Args:
         data: PCB element data dictionary
         CuStack: Copper stackup information
-        netcode: KiCad net code to filter elements
+        netcode: KiCad net code to filter elements (None = use all elements)
         debug: Debug level (0=off, 1=on)
         debug_print: Optional debug print function
 
@@ -345,7 +345,7 @@ def extract_network(data, CuStack, netcode, debug=0, debug_print=None):
     Area = {layer_idx: 0 for layer_idx in range(32)}
 
     for uuid, d in data.items():
-        if not netcode == d["net_code"]:
+        if netcode is not None and d["net_code"] != netcode:
             continue
 
         if len(d["layer"]) > 1:
@@ -471,7 +471,7 @@ def extract_network(data, CuStack, netcode, debug=0, debug_print=None):
     # Handle ZONES: connect all elements touching the same zone
     zone_connections = {}
     for uuid, d in data.items():
-        if netcode != d["net_code"] or d["type"] != "ZONE":
+        if (netcode is not None and d["net_code"] != netcode) or d["type"] != "ZONE":
             continue
 
         zone_conns = d.get("conn_start", [])

@@ -68,17 +68,8 @@ def analyze_pcb_parasitic(
         "error": None,
     }
 
-    # Validate selection
-    if element1["net_code"] != element2["net_code"]:
-        result["error"] = "The marked points are not in the same network."
-        return result
-
-    NetCode = element1["net_code"]
-
     # Extract network ONCE (DC only, no HF calculation)
-    network = extract_network(
-        data, CuStack, NetCode, debug=debug, debug_print=debug_print
-    )
+    network = extract_network(data, CuStack, debug=debug, debug_print=debug_print)
 
     # Find best path across all layer combinations (fast, no simulation)
     best_distance = float("inf")
@@ -158,12 +149,21 @@ def analyze_pcb_parasitic(
     return result
 
 
-def format_result_message(result, CuStack, debug_log_file=None):
+def format_result_message(result, CuStack, debug_log_file=None, net_tie_info=None):
     """Format analysis result as human-readable message."""
     lines = []
 
     if result["error"]:
         return result["error"]
+
+    if net_tie_info:
+        lines.append("Net tie:")
+        for ref in net_tie_info["refs"]:
+            lines.append(f"  {ref}")
+        lines.append("Bridged nets:")
+        for net in net_tie_info["nets"]:
+            lines.append(f"  {net}")
+        lines.append("")
 
     Distance = result["distance"]
     short_path_RES = result["short_path_resistance"]
@@ -405,6 +405,8 @@ def run_plugin(plugin_path, ItemList, board_FileName, new_v9):
                     except Exception:
                         pass
 
+        net_tie_info = ItemList.pop("_net_tie_info", None)
+
         debug_print(f"[DEBUG] Found {len(ItemList)} PCB elements")
 
         if debug:
@@ -445,7 +447,9 @@ def run_plugin(plugin_path, ItemList, board_FileName, new_v9):
                 except Exception:
                     pass
 
-            message = format_result_message(result, CuStack, debug_log_file)
+            message = format_result_message(
+                result, CuStack, debug_log_file, net_tie_info=net_tie_info
+            )
             network_debug_text = None
             if result["network_info"]:
                 network_debug_text = (

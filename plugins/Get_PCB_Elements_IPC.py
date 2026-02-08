@@ -111,6 +111,153 @@ def _cu_layers(layers, enabled_layers=None):
     return sorted(result)
 
 
+def _expand_nets_via_net_ties(board, initial_nets):
+    """Expand a set of nets transitively through all Net Tie footprints.
+
+    For each net, finds Net Tie footprints with pads on that net, adds the
+    bridged nets, and repeats until no new nets are found.
+
+    Returns:
+        (expanded_nets, net_tie_fps): set of all reachable net names,
+            list of Net Tie FootprintInstances involved.
+    """
+    expanded = set(initial_nets)
+    net_tie_fps = []
+    seen_fp_ids = set()
+
+    # Build net-tie index once: list of (fp, group_nets)
+    net_tie_index = []
+    for fp in board.get_footprints():
+        net_ties = fp.definition._proto.net_ties
+        if len(net_ties) == 0:
+            continue
+        pad_net_map = {p.number: p.net.name for p in fp.definition.pads}
+        for nt in net_ties:
+            group_pads = []
+            for entry in nt.pad_number:
+                group_pads.extend(entry.split(","))
+            group_nets = {pad_net_map[pn] for pn in group_pads if pn in pad_net_map}
+            if group_nets:
+                net_tie_index.append((fp, group_nets))
+
+    changed = True
+    while changed:
+        changed = False
+        for fp, group_nets in net_tie_index:
+            fp_id = fp.id.value
+            if fp_id in seen_fp_ids:
+                continue
+            if group_nets & expanded:
+                if not group_nets.issubset(expanded):
+                    expanded |= group_nets
+                    changed = True
+                seen_fp_ids.add(fp_id)
+                net_tie_fps.append(fp)
+
+    if net_tie_fps:
+        refs = []
+        for fp in net_tie_fps:
+            ref = fp.reference_field.text.value if fp.reference_field else "?"
+            refs.append(ref)
+        log.info(
+            "Net-tie expansion: %s -> %s (via %s)",
+            initial_nets,
+            expanded,
+            ", ".join(refs),
+        )
+
+    return expanded, net_tie_fps
+
+
+def _collect_footprint_shapes(fp, enabled_layers):
+    """Collect copper shapes from a footprint as WIRE elements.
+
+    Returns:
+        dict of oid -> element dict (same format as ItemList entries)
+    """
+    items = {}
+
+    for shape in fp.definition.shapes:
+        if not is_copper_layer(shape.layer):
+            continue
+        if enabled_layers is not None and shape.layer not in enabled_layers:
+            continue
+
+        layer_v9 = _layer_v9(shape.layer)
+        if layer_v9 is None:
+            continue
+
+        oid = _obj_id(shape)
+        type_name = type(shape).__name__
+        width = _to_m(shape.attributes.stroke.width)
+
+        if type_name == "BoardSegment":
+            start = _pos_m(shape.start)
+            end = _pos_m(shape.end)
+            dx = end[0] - start[0]
+            dy = end[1] - start[1]
+            length = math.sqrt(dx * dx + dy * dy)
+            if length == 0:
+                continue
+            items[oid] = {
+                "type": "WIRE",
+                "id": oid,
+                "start": start,
+                "end": end,
+                "width": width,
+                "length": length,
+                "area": width * length,
+                "layer": [layer_v9],
+                "net_name": "",
+                "net_code": "",
+                "is_selected": False,
+                "conn_start": [],
+                "conn_end": [],
+            }
+        elif type_name == "BoardArc":
+            start = _pos_m(shape.start)
+            end = _pos_m(shape.end)
+            mid = _pos_m(shape.mid)
+            dx = end[0] - start[0]
+            dy = end[1] - start[1]
+            chord = math.sqrt(dx * dx + dy * dy)
+            r = shape.radius()
+            if r is not None:
+                r_m = _to_m(r)
+                if chord <= 2 * r_m and r_m > 0:
+                    half_angle = math.asin(chord / (2 * r_m))
+                    mid_chord_x = (start[0] + end[0]) / 2
+                    mid_chord_y = (start[1] + end[1]) / 2
+                    d_mid = math.hypot(mid[0] - mid_chord_x, mid[1] - mid_chord_y)
+                    if d_mid > r_m:
+                        arc_length = 2 * r_m * (math.pi - half_angle)
+                    else:
+                        arc_length = 2 * r_m * half_angle
+                else:
+                    arc_length = chord
+            else:
+                arc_length = chord
+            if arc_length == 0:
+                continue
+            items[oid] = {
+                "type": "WIRE",
+                "id": oid,
+                "start": start,
+                "end": end,
+                "width": width,
+                "length": arc_length,
+                "area": width * arc_length,
+                "layer": [layer_v9],
+                "net_name": "",
+                "net_code": "",
+                "is_selected": False,
+                "conn_start": [],
+                "conn_end": [],
+            }
+
+    return items
+
+
 def Get_PCB_Elements_IPC(board: Board):
     """Collect all tracks/vias/pads/zones from the board via IPC API.
 
@@ -123,7 +270,7 @@ def Get_PCB_Elements_IPC(board: Board):
     # Get enabled copper layers from board
     enabled_layers = set(board.get_enabled_layers())
 
-    # Determine target net from selection (exactly 2 items with same net required)
+    # Determine target nets from selection
     selection = list(board.get_selection())
 
     # Fallback: if a single footprint with 2 pads is selected, use its pads
@@ -141,19 +288,22 @@ def Get_PCB_Elements_IPC(board: Board):
         print(f"Error: Please select exactly 2 elements (selected: {len(selection)})")
         return {}
 
-    if len(nets) != 1:
+    # Expand nets transitively through Net Tie footprints
+    target_nets, net_tie_fps = _expand_nets_via_net_ties(board, nets)
+
+    if len(nets) > 1 and not net_tie_fps:
+        # Multiple nets selected but no net-tie bridges them
         log.warning("Selected items belong to different nets: %s", nets)
         print(f"Error: Selected items must belong to the same net (found: {nets})")
         return {}
 
-    target_net = nets.pop()
-    log.info("Target net: %s", target_net)
+    log.info("Target nets: %s", target_nets)
 
     ItemList = {}
 
     # --- Tracks & Arcs ---
     for track in board.get_tracks():
-        if track.net.name != target_net:
+        if track.net.name not in target_nets:
             continue
 
         oid = _obj_id(track)
@@ -211,7 +361,7 @@ def Get_PCB_Elements_IPC(board: Board):
 
     # --- Vias ---
     for via in board.get_vias():
-        if via.net.name != target_net:
+        if via.net.name not in target_nets:
             continue
 
         oid = _obj_id(via)
@@ -234,7 +384,7 @@ def Get_PCB_Elements_IPC(board: Board):
     # --- Pads ---
     pad_objects = {}  # oid -> pad object, for area calculation
     for pad in board.get_pads():
-        if pad.net.name != target_net:
+        if pad.net.name not in target_nets:
             continue
 
         oid = _obj_id(pad)
@@ -290,7 +440,7 @@ def Get_PCB_Elements_IPC(board: Board):
             continue
         if not hasattr(zone, "net") or zone.net is None:
             continue
-        if zone.net.name != target_net:
+        if zone.net.name not in target_nets:
             continue
         if "teardrop" in (zone.name or ""):
             continue
@@ -327,10 +477,31 @@ def Get_PCB_Elements_IPC(board: Board):
             "_outline": outline_pts,  # used by _build_connectivity, removed after
         }
 
-    log.info("Collected %d elements for net %s", len(ItemList), target_net)
+    # --- Footprint copper shapes (Net Tie) ---
+    for fp in net_tie_fps:
+        fp_items = _collect_footprint_shapes(fp, enabled_layers)
+        log.info(
+            "Collected %d copper shapes from footprint %s",
+            len(fp_items),
+            fp.reference_field.text.value if fp.reference_field else "?",
+        )
+        ItemList.update(fp_items)
+
+    log.info("Collected %d elements for nets %s", len(ItemList), target_nets)
 
     # --- Build connectivity from coordinates ---
     _build_connectivity(ItemList)
+
+    # Store net-tie metadata (after _build_connectivity to avoid interfering)
+    if net_tie_fps:
+        refs = [
+            fp.reference_field.text.value if fp.reference_field else "?"
+            for fp in net_tie_fps
+        ]
+        ItemList["_net_tie_info"] = {
+            "refs": refs,
+            "nets": sorted(target_nets),
+        }
 
     return ItemList
 
