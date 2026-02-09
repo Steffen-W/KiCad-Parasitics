@@ -5,6 +5,14 @@ Receives the path segments (WIRE + VIA elements) extracted from the PCB
 network and computes the loop inductance of the trace path.
 """
 
+try:
+    import matplotlib
+
+    matplotlib.use("WXAgg", force=True)
+except Exception:
+    pass
+
+import logging
 import math
 import numpy as np
 import trimesh
@@ -12,6 +20,7 @@ from scipy.spatial import cKDTree
 from bfieldtools.mesh_impedance import self_inductance_matrix
 from bfieldtools.utils import find_mesh_boundaries
 
+log = logging.getLogger(__name__)
 
 _MESH_TARGET_FACES = 2000
 _MAX_MESH_FACES = 5000
@@ -21,7 +30,7 @@ _MAX_MESH_FACES = 5000
 # =========================================================================
 
 
-def calc_path_inductance(path, network_info, cu_stack, debug_print=None, debug=0):
+def calc_path_inductance(path, network_info, cu_stack):
     """Calculate the inductance of a PCB trace path.
 
     Parameters
@@ -36,10 +45,6 @@ def calc_path_inductance(path, network_info, cu_stack, debug_print=None, debug=0
     cu_stack : dict
         Copper stackup. cu_stack[layer_id] contains:
         - abs_height (m), thickness (m), name (str), ...
-    debug_print : callable, optional
-        Print function for debug output.
-    debug : int
-        Debug level. >= 1: save debug plot on error.
 
     Returns
     -------
@@ -47,12 +52,10 @@ def calc_path_inductance(path, network_info, cu_stack, debug_print=None, debug=0
         inductance : float or None – total path inductance in Henry
         segments   : list[dict]    – extracted geometry per segment
         message    : str           – human-readable summary
+        _debug_data : dict         – mesh/psi/M data for debug plots
     """
-    if debug_print is None:
-        debug_print = print
-
-    segments = _extract_segments(path, network_info, cu_stack, debug_print)
-    return _compute_inductance(segments, debug_print, debug=debug)
+    segments = _extract_segments(path, network_info, cu_stack)
+    return _compute_inductance(segments)
 
 
 # =========================================================================
@@ -60,7 +63,7 @@ def calc_path_inductance(path, network_info, cu_stack, debug_print=None, debug=0
 # =========================================================================
 
 
-def _extract_segments(path, network_info, cu_stack, debug_print):
+def _extract_segments(path, network_info, cu_stack):
     """Extract physical geometry from path node sequence."""
     node_to_elem = {}
     for elem in network_info:
@@ -74,9 +77,7 @@ def _extract_segments(path, network_info, cu_stack, debug_print):
         elem = node_to_elem.get(key)
 
         if elem is None:
-            debug_print(
-                f"[calc_inductance] WARNING: no element for nodes {node_a}-{node_b}"
-            )
+            log.warning("No element for nodes %s-%s", node_a, node_b)
             continue
 
         if elem["type"] == "WIRE":
@@ -99,7 +100,7 @@ def _extract_segments(path, network_info, cu_stack, debug_print):
                 "z": z,
                 "thickness": cu_stack.get(layer_id, {}).get("thickness", 35e-6),
             }
-            for key in ("mid", "radius", "angle"):
+            for key in ("mid", "radius", "angle", "_midline_pts"):
                 if key in elem:
                     seg[key] = elem[key]
             segments.append(seg)
@@ -123,16 +124,63 @@ def _extract_segments(path, network_info, cu_stack, debug_print):
     return segments
 
 
-def show_debug_plots(debug_data, segments):
+def _make_plot_frame_class():
+    """Create PlotFrame class using wx (imported lazily)."""
+    import wx
+    from matplotlib.backends.backend_wxagg import FigureCanvasWxAgg as FigureCanvas
+    from matplotlib.backends.backend_wx import NavigationToolbar2Wx as NavToolbar
+
+    class PlotFrame(wx.Frame):
+        """wx.Frame wrapper around a matplotlib Figure."""
+
+        def __init__(self, parent, fig, title="Plot"):
+            size = fig.get_size_inches() * fig.get_dpi()
+            super().__init__(
+                parent,
+                title=title,
+                size=wx.Size(int(size[0]), int(size[1]) + 80),
+            )
+            panel = wx.Panel(self)
+            sizer = wx.BoxSizer(wx.VERTICAL)
+            self.canvas = FigureCanvas(panel, wx.ID_ANY, fig)
+            self.toolbar = NavToolbar(self.canvas)
+            self.toolbar.Realize()
+            sizer.Add(self.toolbar, 0, wx.EXPAND)
+            sizer.Add(self.canvas, 1, wx.EXPAND)
+            panel.SetSizer(sizer)
+            self.Bind(wx.EVT_CLOSE, lambda evt: self.Destroy())
+
+    return PlotFrame
+
+
+def _show_figure(fig, title, parent):
+    """Display a Figure in a PlotFrame via wx.CallAfter (UI-thread safe)."""
+    import wx
+
+    PlotFrame = _make_plot_frame_class()
+
+    def _create():
+        frame = PlotFrame(parent, fig, title)
+        frame.Show()
+        frame.Raise()
+
+    wx.CallAfter(_create)
+
+
+def show_debug_plots(debug_data, segments, parent=None):
     """Show interactive debug plots for centerline and mesh.
 
     Parameters
     ----------
     debug_data : dict with centerline, mesh_vertices, mesh_faces
     segments : list[dict] – segment descriptors
+    parent : wx.Window or None – parent for plot frames (None for standalone)
     """
-    import matplotlib.pyplot as plt
+    from matplotlib.figure import Figure
+    import matplotlib
     import matplotlib.tri as mtri
+    from matplotlib.colors import Normalize, LogNorm
+    from matplotlib.cm import ScalarMappable
 
     layer_colors = {
         "F.Cu": "red",
@@ -147,7 +195,8 @@ def show_debug_plots(debug_data, segments):
     faces = debug_data["mesh_faces"]
 
     # --- Figure 1: Centerline ---
-    fig1, ax1 = plt.subplots(figsize=(10, 10))
+    fig1 = Figure(figsize=(10, 10))
+    ax1 = fig1.add_subplot(111)
     drawn_layers = set()
     for seg in segments:
         if seg["type"] == "VIA":
@@ -169,13 +218,9 @@ def show_debug_plots(debug_data, segments):
         color = layer_colors.get(layer_name, "gray")
         s = np.array(seg["start"]) * 1e3
         e = np.array(seg["end"]) * 1e3
-        mid = seg.get("mid")
-        if mid is not None:
-            pts = _arc_points(
-                seg["start"], seg["end"], mid, width=seg.get("width", 0.0)
-            )
-            pts_mm = [(seg["start"][0] * 1e3, seg["start"][1] * 1e3)]
-            pts_mm.extend((p[0] * 1e3, p[1] * 1e3) for p in pts)
+        midline = seg.get("_midline_pts")
+        if midline is not None and len(midline) > 2:
+            pts_mm = [(p[0] * 1e3, p[1] * 1e3) for p in midline]
             xs, ys = zip(*pts_mm)
             label = layer_name if layer_name not in drawn_layers else None
             ax1.plot(xs, ys, ".-", color=color, lw=2, ms=4, label=label)
@@ -194,24 +239,137 @@ def show_debug_plots(debug_data, segments):
     ax1.set_title(f"Centerline – {len(cl)} pts")
     ax1.set_xlabel("mm")
     ax1.set_ylabel("mm")
+    _show_figure(fig1, f"Centerline – {len(cl)} pts", parent)
 
-    # --- Figure 2: Strip mesh ---
-    fig2, ax2 = plt.subplots(figsize=(12, 12))
-    tri = mtri.Triangulation(verts_mm[:, 0], verts_mm[:, 1], faces)
-    ax2.triplot(tri, color="steelblue", lw=0.3, alpha=0.8)
-    ax2.plot(cl[:, 0], cl[:, 1], "m-", lw=1.5, alpha=0.8, label="centerline")
-    for seg in segments:
-        if seg["type"] == "VIA":
-            px, py = seg["position"]
-            ax2.plot(px * 1e3, py * 1e3, "kx", ms=8, mew=2, zorder=6)
-    ax2.set_aspect("equal")
-    ax2.invert_yaxis()
-    ax2.legend(fontsize=7, loc="best")
-    ax2.set_title(f"Strip mesh: {len(verts_mm)} vertices, {len(faces)} faces")
-    ax2.set_xlabel("mm")
-    ax2.set_ylabel("mm")
+    psi = debug_data.get("psi")
+    M = debug_data.get("M")
 
-    plt.show(block=False)
+    # --- Figure 3: Inductance contribution along centerline ---
+    if psi is not None and M is not None:
+        Mpsi = M @ psi
+        energy_vertex = psi * Mpsi
+        mesh_verts = debug_data["mesh_vertices"]
+        n_cols = int(faces[0].max())
+        n_verts = len(mesh_verts)
+        n_rows = n_verts // n_cols
+        energy_per_row = (
+            energy_vertex[: n_rows * n_cols].reshape(n_rows, n_cols).sum(axis=1)
+        )
+        fine_cl = (
+            mesh_verts[: n_rows * n_cols].reshape(n_rows, n_cols, 3).mean(axis=1) * 1e3
+        )
+        fine_diffs = np.diff(fine_cl, axis=0)
+        fine_seg_len = np.linalg.norm(fine_diffs, axis=1)
+        arc_len = np.concatenate([[0], np.cumsum(fine_seg_len)])
+
+        from matplotlib.gridspec import GridSpec
+
+        fig3 = Figure(figsize=(10, 10))
+        gs = GridSpec(2, 1, height_ratios=[2, 1], hspace=0.3, figure=fig3)
+        ax3a = fig3.add_subplot(gs[0])
+        ax3b = fig3.add_subplot(gs[1])
+        ax3a.set_aspect("equal")
+
+        energy_per_row_nH = energy_per_row * 1e9
+        L_total_nH = (psi @ Mpsi) * 1e9
+
+        norm = Normalize(vmin=energy_per_row_nH.min(), vmax=energy_per_row_nH.max())
+        cmap = matplotlib.colormaps["hot"]
+        for i in range(n_rows - 1):
+            ax3a.plot(
+                [fine_cl[i, 0], fine_cl[i + 1, 0]],
+                [fine_cl[i, 1], fine_cl[i + 1, 1]],
+                color=cmap(norm(energy_per_row_nH[i])),
+                lw=4,
+                solid_capstyle="round",
+            )
+        ax3a.plot(fine_cl[0, 0], fine_cl[0, 1], "go", ms=8, zorder=5, label="start")
+
+        sm = ScalarMappable(cmap=cmap, norm=norm)
+        fig3.colorbar(sm, ax=ax3a, label="Inductance contribution (nH)")
+        ax3a.legend(fontsize=7, loc="best")
+        ax3a.invert_yaxis()
+        ax3a.set_title(f"Inductance along trace (total L = {L_total_nH:.2f} nH)")
+        ax3a.set_xlabel("mm")
+        ax3a.set_ylabel("mm")
+
+        ax3b.fill_between(arc_len, energy_per_row_nH, alpha=0.4, color="crimson")
+        ax3b.plot(arc_len, energy_per_row_nH, color="crimson", lw=1.5)
+        ax3b.set_xlabel("Position along trace (mm)")
+        ax3b.set_ylabel("Inductance contribution (nH)")
+        ax3b.grid(True, alpha=0.3)
+
+        title3 = f"Inductance along trace (L = {L_total_nH:.2f} nH)"
+        _show_figure(fig3, title3, parent)
+
+    # --- Figure 4: |B|-field + current distribution (psi) ---
+    if psi is not None:
+        from bfieldtools.mesh_magnetics import magnetic_field_coupling
+
+        mesh = trimesh.Trimesh(
+            vertices=debug_data["mesh_vertices"],
+            faces=debug_data["mesh_faces"],
+            process=False,
+        )
+        z_mean = mesh.vertices[:, 2].mean()
+        z_offset = z_mean + 0.5e-3
+        margin = 2e-3
+        x_min, x_max = (
+            mesh.vertices[:, 0].min() - margin,
+            mesh.vertices[:, 0].max() + margin,
+        )
+        y_min, y_max = (
+            mesh.vertices[:, 1].min() - margin,
+            mesh.vertices[:, 1].max() + margin,
+        )
+        n_grid = 40
+        x_grid = np.linspace(x_min, x_max, n_grid)
+        y_grid = np.linspace(y_min, y_max, n_grid)
+        X, Y = np.meshgrid(x_grid, y_grid)
+        grid_pts = np.column_stack([X.ravel(), Y.ravel(), np.full(X.size, z_offset)])
+
+        B_coupling = magnetic_field_coupling(mesh, grid_pts, analytic=True)
+        B = np.einsum("ijk,k->ij", B_coupling, psi)  # (Npts, 3)
+        B_mag = np.linalg.norm(B, axis=1).reshape(X.shape)
+
+        X_mm = X * 1e3
+        Y_mm = Y * 1e3
+        fig4 = Figure(figsize=(14, 10), constrained_layout=True)
+        ax4 = fig4.add_subplot(111)
+
+        # |B|-field as pcolormesh with log scale
+        B_mag_pos = np.where(B_mag > 0, B_mag, np.nan)
+        b_min = np.nanmin(B_mag_pos)
+        b_max = np.nanmax(B_mag_pos)
+        if b_min > 0 and b_max > b_min:
+            pcm = ax4.pcolormesh(
+                X_mm,
+                Y_mm,
+                B_mag_pos,
+                norm=LogNorm(vmin=b_min, vmax=b_max),
+                cmap="viridis",
+                shading="gouraud",
+            )
+            fig4.colorbar(pcm, ax=ax4, label="|B| (T)", fraction=0.035, pad=0.04)
+
+        # Overlay: current distribution (psi on mesh)
+        tri = mtri.Triangulation(verts_mm[:, 0], verts_mm[:, 1], faces)
+        psi_face = psi[faces].mean(axis=1)
+        tc = ax4.tripcolor(
+            tri, psi_face, shading="flat", cmap="inferno", edgecolors="face"
+        )
+        fig4.colorbar(
+            tc, ax=ax4, label="Stream function psi (A)", fraction=0.035, pad=0.08
+        )
+
+        ax4.plot(cl[0, 0], cl[0, 1], "r^", ms=8, mew=2, zorder=8, label="start")
+        ax4.legend(fontsize=7, loc="best")
+        ax4.set_aspect("equal")
+        ax4.invert_yaxis()
+        ax4.set_title(f"|B| at z = {z_offset * 1e3:.2f} mm + current distribution")
+        ax4.set_xlabel("mm")
+        ax4.set_ylabel("mm")
+        _show_figure(fig4, "|B| field + current distribution", parent)
 
 
 # =========================================================================
@@ -219,7 +377,7 @@ def show_debug_plots(debug_data, segments):
 # =========================================================================
 
 
-def _compute_inductance(segments, debug_print=None, debug=0):
+def _compute_inductance(segments):
     """Compute inductance from physical trace segments.
 
     1. Build ordered 3D centerline from segments
@@ -227,14 +385,11 @@ def _compute_inductance(segments, debug_print=None, debug=0):
     3. Build strip mesh (already 3D)
     4. Compute stream function + L via bfieldtools self_inductance_matrix
     """
-    if debug_print is None:
-        debug_print = print
-
     # --- Format segment info ---
     segment_lines, path_summary, n_layers = _format_segments(segments)
 
     # --- Build ordered 3D centerline ---
-    centerline, width_per_seg = _build_centerline(segments, debug_print)
+    centerline, width_per_seg = _build_centerline(segments)
 
     if len(centerline) < 3:
         return {
@@ -249,10 +404,10 @@ def _compute_inductance(segments, debug_print=None, debug=0):
     gap = np.linalg.norm(end[:2] - start[:2])
     trace_width_prelim = min(width_per_seg)
     if gap > trace_width_prelim * 10:
-        debug_print(
-            f"[calc_inductance] WARNING: closing loop with large gap\n"
-            f"  gap: {gap * 1e3:.2f} mm\n"
-            f"  trace width: {trace_width_prelim * 1e3:.2f} mm"
+        log.warning(
+            "Closing loop with large gap: gap=%.2f mm, trace width=%.2f mm",
+            gap * 1e3,
+            trace_width_prelim * 1e3,
         )
     centerline.append(centerline[0])
     width_per_seg.append(width_per_seg[-1])
@@ -262,7 +417,6 @@ def _compute_inductance(segments, debug_print=None, debug=0):
         mesh = _build_strip_mesh(
             centerline,
             width_per_seg,
-            debug_print=debug_print,
         )
         psi = _build_stream_function(mesh)
     except ValueError as e:
@@ -275,7 +429,7 @@ def _compute_inductance(segments, debug_print=None, debug=0):
     # --- Compute inductance ---
     n_verts = len(mesh.vertices)
     n_faces = len(mesh.faces)
-    debug_print(f"[calc_inductance] Mesh: {n_verts} vertices, {n_faces} faces")
+    log.debug("Mesh: %d vertices, %d faces", n_verts, n_faces)
 
     if n_faces > _MAX_MESH_FACES:
         msg = "\n".join(
@@ -288,10 +442,10 @@ def _compute_inductance(segments, debug_print=None, debug=0):
                 "Try a shorter or simpler path between the pads.",
             ]
         )
-        debug_print(f"[calc_inductance] {msg}")
+        log.warning("%s", msg)
         return {"inductance": None, "segments": segments, "message": msg}
 
-    debug_print("[calc_inductance] Computing self-inductance matrix ...")
+    log.debug("Computing self-inductance matrix ...")
     try:
         M = self_inductance_matrix(mesh, quad_degree=2)
     except MemoryError:
@@ -304,10 +458,10 @@ def _compute_inductance(segments, debug_print=None, debug=0):
                 "Try a shorter or simpler path between the pads.",
             ]
         )
-        debug_print(f"[calc_inductance] {msg}")
+        log.error("%s", msg)
         return {"inductance": None, "segments": segments, "message": msg}
     L = float(psi @ M @ psi)
-    debug_print(f"[calc_inductance] L = {L * 1e9:.2f} nH")
+    log.info("L = %.2f nH", L * 1e9)
 
     # --- Build output: result first, summary, then segment details ---
     lines = [
@@ -323,13 +477,18 @@ def _compute_inductance(segments, debug_print=None, debug=0):
     ]
     lines.extend(segment_lines)
 
-    result = {"inductance": L, "segments": segments, "message": "\n".join(lines)}
-    if debug >= 1:
-        result["_debug_data"] = {
+    result = {
+        "inductance": L,
+        "segments": segments,
+        "message": "\n".join(lines),
+        "_debug_data": {
             "centerline": centerline,
             "mesh_vertices": mesh.vertices,
             "mesh_faces": mesh.faces,
-        }
+            "psi": psi,
+            "M": M,
+        },
+    }
     return result
 
 
@@ -338,90 +497,7 @@ def _compute_inductance(segments, debug_print=None, debug=0):
 # =========================================================================
 
 
-def _arc_points(start, end, mid, width=0.0):
-    """Interpolate points along a circular arc defined by start, mid, end.
-
-    Uses the three-point circle formula to find center and radius,
-    then adaptively samples points so that the maximum chord error
-    (sagitta) of each sub-arc stays below *width*/4 (clamped to
-    [2, 64] points).  For nearly-straight arcs this produces very
-    few points; for tight bends it produces many.
-
-    Returns list of (x, y) tuples (excluding *start*, including *end*).
-    """
-    sx, sy = start
-    mx, my = mid
-    ex, ey = end
-
-    # Three-point circle: find circumcenter
-    ax, ay = sx, sy
-    bx, by = mx, my
-    cx, cy = ex, ey
-    D = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by))
-    if abs(D) < 1e-30:
-        # Degenerate (collinear) – fall back to straight line
-        return [(ex, ey)]
-
-    ux = (
-        (ax * ax + ay * ay) * (by - cy)
-        + (bx * bx + by * by) * (cy - ay)
-        + (cx * cx + cy * cy) * (ay - by)
-    ) / D
-    uy = (
-        (ax * ax + ay * ay) * (cx - bx)
-        + (bx * bx + by * by) * (ax - cx)
-        + (cx * cx + cy * cy) * (bx - ax)
-    ) / D
-
-    r = math.hypot(sx - ux, sy - uy)
-
-    # Angles of start, mid, end relative to center
-    a_start = math.atan2(sy - uy, sx - ux)
-    a_mid = math.atan2(my - uy, mx - ux)
-    a_end = math.atan2(ey - uy, ex - ux)
-
-    # Determine arc direction (CW or CCW) so that mid is between start and end
-    def _normalize(a, ref):
-        """Normalize angle *a* into [ref, ref+2pi)."""
-        while a < ref:
-            a += 2 * math.pi
-        while a >= ref + 2 * math.pi:
-            a -= 2 * math.pi
-        return a
-
-    # Try CCW (positive) direction
-    a_mid_ccw = _normalize(a_mid, a_start)
-    a_end_ccw = _normalize(a_end, a_start)
-    if a_mid_ccw < a_end_ccw:
-        sweep = a_end_ccw - a_start
-    else:
-        # CW sweep – use negative direction
-        a_start_cw = _normalize(a_start, a_end)
-        sweep = -(a_start_cw - a_end)
-
-    # Adaptive point count based on chord error tolerance.
-    # Sagitta of a sub-arc with half-angle alpha: s = r*(1 - cos(alpha)).
-    # We want s <= tol, so alpha <= arccos(1 - tol/r).
-    # n_points = ceil(|sweep| / (2*alpha)).
-    tol = max(width / 4, 1e-7) if width > 0 else r * 0.01
-    ratio = tol / r if r > 0 else 1.0
-    if ratio >= 1.0:
-        n_points = 2
-    else:
-        max_sub_angle = 2 * math.acos(1 - ratio)
-        n_points = math.ceil(abs(sweep) / max_sub_angle)
-    n_points = max(2, min(n_points, 64))
-
-    points = []
-    for i in range(1, n_points + 1):
-        t = i / n_points
-        angle = a_start + sweep * t
-        points.append((ux + r * math.cos(angle), uy + r * math.sin(angle)))
-
-    return points
-
-
-def _build_centerline(segments, debug_print=None):
+def _build_centerline(segments):
     """Build ordered 3D centerline from path segments.
 
     VIAs produce two points at the same (x,y) with z_from and z_to,
@@ -481,11 +557,7 @@ def _build_centerline(segments, debug_print=None):
 
         w = seg.get("width", 0.0)
         if w <= 0:
-            if debug_print:
-                debug_print(
-                    f"[calc_inductance] Skipping WIRE with width=0 "
-                    f"(id={seg.get('id', '?')})"
-                )
+            log.debug("Skipping WIRE with width=0 (id=%s)", seg.get("id", "?"))
             continue
 
         last_width = w
@@ -506,24 +578,28 @@ def _build_centerline(segments, debug_print=None):
             last_xy = np.array(centerline[-1][:2])
             gap = np.linalg.norm(entry - last_xy)
             if gap > 1e-6:
-                if debug_print:
-                    debug_print(
-                        f"[calc_inductance] WARNING: gap of {gap * 1e3:.3f} mm "
-                        f"between centerline end "
-                        f"({last_xy[0] * 1e3:.2f},{last_xy[1] * 1e3:.2f}) "
-                        f"and next segment entry "
-                        f"({entry[0] * 1e3:.2f},{entry[1] * 1e3:.2f}) "
-                        f"– inserting bridge (w={w * 1e3:.2f} mm)"
-                    )
+                log.debug(
+                    "Gap of %.3f mm between centerline end (%.2f,%.2f) "
+                    "and next segment entry (%.2f,%.2f) – inserting bridge (w=%.2f mm)",
+                    gap * 1e3,
+                    last_xy[0] * 1e3,
+                    last_xy[1] * 1e3,
+                    entry[0] * 1e3,
+                    entry[1] * 1e3,
+                    w * 1e3,
+                )
                 centerline.append((entry[0], entry[1], z))
                 width_per_seg.append(w)
 
-        mid = seg.get("mid")
-        if mid is not None:
-            arc_pts = _arc_points(tuple(entry), tuple(exit_), mid, width=w)
-            for pt in arc_pts:
+        midline = seg.get("_midline_pts")
+        if midline is not None and len(midline) > 2:
+            # Reverse midline if traversal direction is opposite to stored order
+            if seg["path_from"] != seg["node_at_start"]:
+                midline = midline[::-1]
+            # Use pre-computed arc midline points (skip first, it's the entry)
+            for pt in midline[1:]:
                 centerline.append((pt[0], pt[1], z))
-            width_per_seg.extend([w] * len(arc_pts))
+            width_per_seg.extend([w] * (len(midline) - 1))
         else:
             centerline.append((exit_[0], exit_[1], z))
             width_per_seg.append(w)
@@ -556,7 +632,10 @@ def _neighbor_width(via_seg, segments, fallback):
 
 
 def _build_strip_mesh(
-    centerline, width_per_seg, max_faces=_MESH_TARGET_FACES, n_width=4, debug_print=None
+    centerline,
+    width_per_seg,
+    max_faces=_MESH_TARGET_FACES,
+    n_width=4,
 ):
     """Build a 3D strip mesh from a closed centerline.
 
@@ -570,13 +649,11 @@ def _build_strip_mesh(
     width_per_seg : (N-1,) array – trace width per segment in meters.
     max_faces : int – target maximum faces (subdivide long segments to reach it).
     n_width : int – number of quads across the strip width.
-    debug_print : callable, optional
 
     Returns
     -------
     trimesh.Trimesh – 3D mesh in meters with ring topology (2 boundaries).
     """
-    _dp = debug_print or (lambda *a: None)
     pts = np.array(centerline)
     n_pts = len(pts)
     if n_pts < 3:
@@ -626,10 +703,7 @@ def _build_strip_mesh(
     widths = np.array(new_widths)
     n_pts = len(pts)
 
-    _dp(
-        f"[calc_inductance] Strip mesh: {n_pts} centerline points, "
-        f"{n_width} width quads"
-    )
+    log.debug("Strip mesh: %d centerline points, %d width quads", n_pts, n_width)
 
     # --- Compute per-point normals perpendicular to path in xy-plane ---
     # Use averaged incoming+outgoing tangent normals to avoid degeneracy at corners
@@ -685,7 +759,7 @@ def _build_strip_mesh(
 
     faces = np.array(faces)
     n_faces = len(faces)
-    _dp(f"[calc_inductance] Strip mesh: {len(verts)} vertices, {n_faces} faces")
+    log.debug("Strip mesh: %d vertices, %d faces", len(verts), n_faces)
 
     mesh = trimesh.Trimesh(vertices=verts, faces=faces, process=False)
     return mesh

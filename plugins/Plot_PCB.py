@@ -1,108 +1,169 @@
+"""Plot debug_ItemList.json: outlines, endpoint circles, pads, vias, node IDs."""
+
+import json
+import os
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle, Ellipse, Circle
-from matplotlib.transforms import Affine2D
-import numpy as np
+from matplotlib.patches import Circle, Polygon
+
+DATA_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "debug_ItemList.json"
+)
+
+LAYER_COLORS = {0: "red", 2: "blue", 4: "green", 6: "orange"}
 
 
-def Plot_PCB(data):
-    figure, axes = plt.subplots()
-    axes.set_aspect(1)
-    axes.invert_yaxis()
+def _color(layers):
+    for ly in layers:
+        if ly in LAYER_COLORS:
+            return LAYER_COLORS[ly]
+    return "gray"
 
-    Color = {0: "red", 1: "green", 2: "orange", 3: "cyan", 4: "pink", 31: "blue"}
-    for i in range(0, 32):
-        if i not in Color:
-            Color[i] = "silver"
 
-    def NameNetInPlot(uuid, layer, active=True, netStart=True):
-        if netStart:
-            text = data[uuid]["net_start"]
-            if "start" in data[uuid]:
-                pos = data[uuid]["start"]
-            else:
-                pos = data[uuid]["position"]
-        else:
-            text = data[uuid]["net_end"]
-            pos = data[uuid]["end"]
-        if layer == 0:
-            plt.text(
-                *pos,
-                text[layer],
-                horizontalalignment="left",
-                verticalalignment="bottom",
-            )
-        elif layer == 31:
-            plt.text(
-                *pos, text[layer], horizontalalignment="left", verticalalignment="top"
-            )
-        elif layer == 1:
-            plt.text(
-                *pos,
-                text[layer],
-                horizontalalignment="right",
-                verticalalignment="bottom",
-            )
-        else:
-            plt.text(
-                *pos, text[layer], horizontalalignment="right", verticalalignment="top"
-            )
+def _collect_nodes(d, pos_mm):
+    """Extract node IDs from net_start/net_end and map to positions."""
+    nodes = {}
+    for layer in d.get("layer", []):
+        for net_key, p in [("net_start", pos_mm[0]), ("net_end", pos_mm[1])]:
+            ns = d.get(net_key, {})
+            n = ns.get(layer) or ns.get(str(layer))
+            if n and n > 0:
+                nodes[n] = p
+    return nodes
 
-    for uuid, d in list(data.items()):
-        if d["type"] == "VIA":
-            circ = Circle(d["position"], d["width"] / 2, color="grey", alpha=0.5)
-            axes.add_artist(circ)
-            if "drill" in d:
-                axes.add_artist(Circle(d["position"], d["drill"] / 2, color="w"))
-            # plt.text(*d["position"], str(data[uuid]["net_start"]))
-            for layer in d["layer"]:
-                NameNetInPlot(uuid, layer)
 
-    def plotwire(Start, End, Width, layer, uuid):
-        plt.arrow(
-            Start[0],
-            Start[1],
-            End[0] - Start[0],
-            End[1] - Start[1],
-            width=Width,
-            head_length=0,
-            head_width=Width,
-            color=Color[layer],
-            alpha=0.5,
-        )
-        axes.add_artist(Circle(Start, Width / 2, color=Color[layer], alpha=0.25))
-        axes.add_artist(Circle(End, Width / 2, color=Color[layer], alpha=0.25))
-        NameNetInPlot(uuid, layer, netStart=True)
-        NameNetInPlot(uuid, layer, netStart=False)
+def plot_items(data):
+    fig, ax = plt.subplots(figsize=(14, 14))
+    node_positions = {}
 
-    for uuid, d in list(data.items()):
-        if d["type"] == "WIRE":
-            plotwire(d["start"], d["end"], d["width"], d["layer"][0], uuid)
-            # data[uuid]["R"] = calcResWIRE(d["start"], d["end"], d["width"])
+    for oid, d in data.items():
+        typ = d["type"]
+        color = _color(d.get("layer", []))
+        outline = d.get("_outline")
 
-    for uuid, d in list(data.items()):
-        if d["type"] == "PAD":
-            if d["shape"] in {0, 2}:  # oval
-                ellip = Ellipse(
-                    d["position"],
-                    *d["size"],
-                    color=Color[d["layer"][0]],
-                    alpha=0.5,
-                    angle=d["orientation"],
+        if typ == "WIRE":
+            w = d.get("width", 0)
+            r = w / 2 * 1e3
+
+            if outline and len(outline) >= 3:
+                pts = [(p[0] * 1e3, p[1] * 1e3) for p in outline]
+                ax.add_patch(
+                    Polygon(pts, closed=True, fc=color, ec=color, alpha=0.15, lw=0.3)
                 )
-                axes.add_patch(ellip)
-            else:
-                rec = Rectangle(
-                    np.array(d["position"]) - np.array(d["size"]) / 2,
-                    width=d["size"][0],
-                    height=d["size"][1],
-                    color=Color[d["layer"][0]],
-                    alpha=0.5,
-                    transform=Affine2D().rotate_deg_around(
-                        *d["position"], d["orientation"]
+
+            midline = d.get("_midline_pts")
+            if midline and len(midline) >= 2:
+                ax.plot(
+                    [p[0] * 1e3 for p in midline],
+                    [p[1] * 1e3 for p in midline],
+                    "-",
+                    color=color,
+                    lw=0.5,
+                    alpha=0.6,
+                )
+
+            sx, sy = d["start"][0] * 1e3, d["start"][1] * 1e3
+            ex, ey = d["end"][0] * 1e3, d["end"][1] * 1e3
+            ax.add_patch(Circle((sx, sy), r, fc="none", ec=color, lw=0.3, alpha=0.5))
+            ax.add_patch(Circle((ex, ey), r, fc="none", ec=color, lw=0.3, alpha=0.5))
+
+            if d.get("is_selected"):
+                ax.plot([sx, ex], [sy, ey], "o-", color="lime", ms=4, lw=2, zorder=10)
+
+            node_positions.update(_collect_nodes(d, ((sx, sy), (ex, ey))))
+
+        elif typ == "VIA":
+            px, py = d["position"][0] * 1e3, d["position"][1] * 1e3
+            r = d.get("drill", 0.0003) / 2 * 1e3
+            ax.add_patch(
+                Circle((px, py), r, fc="black", ec="black", alpha=0.4, zorder=5)
+            )
+
+            for layer in d.get("layer", []):
+                ns = d.get("net_start", {})
+                n = ns.get(layer) or ns.get(str(layer))
+                if n and n > 0:
+                    node_positions[n] = (px, py)
+
+        elif typ == "PAD":
+            px, py = d["position"][0] * 1e3, d["position"][1] * 1e3
+
+            if outline and len(outline) >= 3:
+                pts = [(p[0] * 1e3, p[1] * 1e3) for p in outline]
+                ax.add_patch(
+                    Polygon(
+                        pts,
+                        closed=True,
+                        fc="gold",
+                        ec="darkgoldenrod",
+                        alpha=0.3,
+                        lw=0.5,
                     )
-                    + axes.transData,
                 )
-                axes.add_patch(rec)
-            NameNetInPlot(uuid, d["layer"][0])
+            else:
+                sx, sy = d.get("size", (0.001, 0.001))
+                r = max(sx, sy) / 2 * 1e3
+                ax.add_patch(
+                    Circle((px, py), r, fc="gold", ec="darkgoldenrod", alpha=0.3)
+                )
 
-    plt.show()
+            ax.text(
+                px,
+                py,
+                d.get("PadName", ""),
+                fontsize=12,
+                ha="center",
+                va="top",
+                zorder=8,
+            )
+
+            if d.get("is_selected"):
+                sx, sy = d.get("size", (0.001, 0.001))
+                r = max(sx, sy) / 2 * 1e3
+                ax.add_patch(Circle((px, py), r, fc="none", ec="lime", lw=2, zorder=10))
+
+            for layer in d.get("layer", []):
+                ns = d.get("net_start", {})
+                n = ns.get(layer) or ns.get(str(layer))
+                if n and n > 0:
+                    node_positions[n] = (px, py)
+
+        elif typ == "ZONE":
+            if outline and len(outline) >= 3:
+                pts = [(p[0] * 1e3, p[1] * 1e3) for p in outline]
+                ax.add_patch(
+                    Polygon(pts, closed=True, fc=color, ec=color, alpha=0.05, lw=0.3)
+                )
+
+    # Plot node labels
+    for node_id, (x, y) in node_positions.items():
+        ax.text(
+            x,
+            y,
+            f"n{node_id}",
+            fontsize=10,
+            color="purple",
+            fontweight="bold",
+            ha="left",
+            va="bottom",
+            zorder=12,
+        )
+
+    ax.set_aspect("equal")
+    ax.invert_yaxis()
+    ax.set_xlabel("mm")
+    ax.set_ylabel("mm")
+    ax.grid(True, alpha=0.2)
+    ax.set_title(f"debug_ItemList.json ({len(data)} elements)")
+    plt.tight_layout()
+    plt.show(block=False)
+    plt.pause(0.1)
+    input("Press Enter to close...")
+    plt.close("all")
+
+
+if __name__ == "__main__":
+    with open(DATA_FILE) as f:
+        data = json.load(f)
+    data = {k: v for k, v in data.items() if isinstance(v, dict) and "type" in v}
+    print(f"Loaded {len(data)} elements from {DATA_FILE}")
+    plot_items(data)

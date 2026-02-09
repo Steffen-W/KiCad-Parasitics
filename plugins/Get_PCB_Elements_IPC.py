@@ -251,6 +251,8 @@ def _collect_footprint_shapes(fp, enabled_layers):
             length = math.sqrt(dx * dx + dy * dy)
             if length == 0:
                 continue
+            wr = width / 2
+            nx, ny = -dy / length * wr, dx / length * wr
             items[oid] = {
                 "type": "WIRE",
                 "id": oid,
@@ -265,6 +267,13 @@ def _collect_footprint_shapes(fp, enabled_layers):
                 "is_selected": False,
                 "conn_start": [],
                 "conn_end": [],
+                "_midline_pts": [start, end],
+                "_outline": [
+                    (start[0] + nx, start[1] + ny),
+                    (end[0] + nx, end[1] + ny),
+                    (end[0] - nx, end[1] - ny),
+                    (start[0] - nx, start[1] - ny),
+                ],
             }
         elif type_name == "BoardArc":
             start = _pos_m(shape.start)
@@ -289,9 +298,45 @@ def _collect_footprint_shapes(fp, enabled_layers):
                 "is_selected": False,
                 "conn_start": [],
                 "conn_end": [],
+                "_midline_pts": [start, end],
             }
             if r_m is not None:
                 item["radius"] = r_m
+                # Compute center from 3-point circumcircle for _arc_points
+                sx, sy = start
+                mx, my = mid
+                ex, ey = end
+                D = 2 * (sx * (my - ey) + mx * (ey - sy) + ex * (sy - my))
+                if abs(D) > 1e-30:
+                    ux = (
+                        (sx * sx + sy * sy) * (my - ey)
+                        + (mx * mx + my * my) * (ey - sy)
+                        + (ex * ex + ey * ey) * (sy - my)
+                    ) / D
+                    uy = (
+                        (sx * sx + sy * sy) * (ex - mx)
+                        + (mx * mx + my * my) * (sx - ex)
+                        + (ex * ex + ey * ey) * (mx - sx)
+                    ) / D
+                    arc_sa = math.atan2(sy - uy, sx - ux)
+                    item["_midline_pts"] = [start] + _arc_points(
+                        (ux, uy), r_m, arc_sa, angle, width
+                    )
+            # Build outline from midline
+            midline = item["_midline_pts"]
+            wr = width / 2
+            if len(midline) > 1:
+                left, right = [], []
+                for k in range(len(midline) - 1):
+                    sdx = midline[k + 1][0] - midline[k][0]
+                    sdy = midline[k + 1][1] - midline[k][1]
+                    ln = math.hypot(sdx, sdy) or 1e-30
+                    lnx, lny = -sdy / ln * wr, sdx / ln * wr
+                    left.append((midline[k][0] + lnx, midline[k][1] + lny))
+                    right.append((midline[k][0] - lnx, midline[k][1] - lny))
+                left.append((midline[-1][0] + lnx, midline[-1][1] + lny))
+                right.append((midline[-1][0] - lnx, midline[-1][1] - lny))
+                item["_outline"] = left + right[::-1]
             items[oid] = item
 
     return items
@@ -303,7 +348,7 @@ def Get_PCB_Elements_IPC(board: Board):
     Returns ItemList in the same dict format as
     Get_PCB_Elements.Get_PCB_Elements().
     """
-    selection_ids = {item.id.value for item in board.get_selection()}
+    selection_ids = {item.id.value for item in board.get_selection()}  # type: ignore[attr-defined]
     log.info("Selection: %d items", len(selection_ids))
 
     # Get enabled copper layers from board
@@ -320,7 +365,7 @@ def Get_PCB_Elements_IPC(board: Board):
             selection = fp_pads
             selection_ids = {pad.id.value for pad in fp_pads}
 
-    nets = {item.net.name for item in selection if hasattr(item, "net")}
+    nets = {item.net.name for item in selection if hasattr(item, "net")}  # type: ignore[attr-defined]
 
     if len(selection) != 2:
         log.warning("Expected 2 selected items, got %d", len(selection))
@@ -374,13 +419,44 @@ def Get_PCB_Elements_IPC(board: Board):
 
         if isinstance(track, ArcTrack):
             mid = _pos_m(track.mid)
-            r_m, angle, arc_length = _arc_geometry(start, end, mid)
+            arc_center = (_to_m(track.center.x), _to_m(track.center.y))
+            arc_radius = _to_m(track.radius())
+            arc_sweep = track.angle()  # radians, signed
+            arc_start_angle = track.start_angle()  # radians
+            arc_length = abs(arc_sweep) * arc_radius
+            midline = [start] + _arc_points(
+                arc_center, arc_radius, arc_start_angle, arc_sweep, width
+            )
             temp["mid"] = mid
-            temp["angle"] = angle
+            temp["angle"] = arc_sweep
             temp["length"] = arc_length
             temp["area"] = width * arc_length
-            if r_m is not None:
-                temp["radius"] = r_m
+            temp["radius"] = arc_radius
+            temp["_midline_pts"] = midline
+            # Build outline from midline
+            wr = width / 2
+            left, right = [], []
+            for k in range(len(midline) - 1):
+                sdx = midline[k + 1][0] - midline[k][0]
+                sdy = midline[k + 1][1] - midline[k][1]
+                ln = math.hypot(sdx, sdy) or 1e-30
+                nx, ny = -sdy / ln * wr, sdx / ln * wr
+                left.append((midline[k][0] + nx, midline[k][1] + ny))
+                right.append((midline[k][0] - nx, midline[k][1] - ny))
+            left.append((midline[-1][0] + nx, midline[-1][1] + ny))
+            right.append((midline[-1][0] - nx, midline[-1][1] - ny))
+            temp["_outline"] = left + right[::-1]
+        else:
+            # Straight wire: simple outline and midline
+            temp["_midline_pts"] = [start, end]
+            wr = width / 2
+            nx, ny = -dy / length * wr, dx / length * wr
+            temp["_outline"] = [
+                (start[0] + nx, start[1] + ny),
+                (end[0] + nx, end[1] + ny),
+                (end[0] - nx, end[1] - ny),
+                (start[0] - nx, start[1] - ny),
+            ]
 
         ItemList[oid] = temp
 
@@ -426,10 +502,20 @@ def Get_PCB_Elements_IPC(board: Board):
         shape = pad_layer.shape if pad_layer else 0
         pad_objects[oid] = (pad, layers)
 
+        cx, cy = _pos_m(pad.position)
+        angle_rad = math.radians(pad.padstack.angle.degrees)
+        cos_a, sin_a = math.cos(angle_rad), math.sin(angle_rad)
+        rx, ry = size[0] / 2, size[1] / 2
+        corners = [(-rx, -ry), (rx, -ry), (rx, ry), (-rx, ry)]
+        pad_outline = [
+            (cx + lx * cos_a - ly * sin_a, cy + lx * sin_a + ly * cos_a)
+            for lx, ly in corners
+        ]
+
         ItemList[oid] = {
             "type": "PAD",
             "id": oid,
-            "position": _pos_m(pad.position),
+            "position": (cx, cy),
             "size": size,
             "orientation": pad.padstack.angle.degrees,
             "drill_size": (drill_d, drill_d),
@@ -442,13 +528,13 @@ def Get_PCB_Elements_IPC(board: Board):
             "net_code": pad.net.name,
             "is_selected": pad.id.value in selection_ids,
             "conn_start": [],
+            "_outline": pad_outline,
         }
 
-    # Compute pad areas via board.get_pad_shapes_as_polygons()
+    # Compute pad areas and accurate outlines via board.get_pad_shapes_as_polygons()
     for oid, (pad, layers) in pad_objects.items():
         if not layers:
             continue
-        # Use first copper layer for polygon shape
         first_layer = [bl for bl in pad.padstack.layers if is_copper_layer(bl)]
         if not first_layer:
             continue
@@ -456,6 +542,9 @@ def Get_PCB_Elements_IPC(board: Board):
             poly = board.get_pad_shapes_as_polygons(pad, layer=first_layer[0])
             if poly is not None:
                 ItemList[oid]["area"] = _polygon_area(poly)
+                outline_pts = _linearize_polyline(poly.outline)
+                if len(outline_pts) >= 3:
+                    ItemList[oid]["_outline"] = outline_pts
         except Exception:
             log.debug("Failed to get pad polygon for %s", oid)
 
@@ -594,35 +683,61 @@ def _point_near_polygon(point, polygon, margin):
     return False
 
 
+def _arc_points(center, radius, start_angle, sweep, width=0.0):
+    """Interpolate points along a circular arc from API data.
+
+    Parameters
+    ----------
+    center : (cx, cy) – arc center in meters
+    radius : float – arc radius in meters
+    start_angle : float – start angle in radians
+    sweep : float – signed sweep angle in radians (positive = CCW)
+    width : float – track width for adaptive sampling tolerance
+
+    Returns list of (x, y) tuples (excluding start, including end).
+    """
+    cx, cy = center
+
+    if radius < 1e-15 or abs(sweep) < 1e-12:
+        angle = start_angle + sweep
+        return [(cx + radius * math.cos(angle), cy + radius * math.sin(angle))]
+
+    # Adaptive point count based on chord error tolerance.
+    tol = max(width / 4, 1e-7) if width > 0 else radius * 0.01
+    ratio = tol / radius if radius > 0 else 1.0
+    if ratio >= 1.0:
+        n_points = 2
+    else:
+        max_sub_angle = 2 * math.acos(1 - ratio)
+        n_points = math.ceil(abs(sweep) / max_sub_angle)
+    n_points = max(2, min(n_points, 64))
+
+    points = []
+    for i in range(1, n_points + 1):
+        t = i / n_points
+        angle = start_angle + sweep * t
+        points.append((cx + radius * math.cos(angle), cy + radius * math.sin(angle)))
+
+    return points
+
+
 def _compute_bbox(d):
     """Compute bounding box (min_x, min_y, max_x, max_y) for an element."""
-    t = d["type"]
-    if t == "WIRE":
-        w = d.get("width", 0) / 2
+    if "_outline" in d:
+        xs = [p[0] for p in d["_outline"]]
+        ys = [p[1] for p in d["_outline"]]
+        return (min(xs), min(ys), max(xs), max(ys))
+    if "position" in d:
+        # VIA or element with position ± radius
+        px, py = d["position"]
+        r = d.get("width", d.get("drill", 0)) / 2
+        return (px - r, py - r, px + r, py + r)
+    # Fallback for WIRE without _outline (should not happen normally)
+    if "start" in d and "end" in d:
         x0, y0 = d["start"]
         x1, y1 = d["end"]
+        w = d.get("width", 0) / 2
         return (min(x0, x1) - w, min(y0, y1) - w, max(x0, x1) + w, max(y0, y1) + w)
-    elif t in ("VIA", "PAD"):
-        px, py = d["position"]
-        if t == "PAD":
-            sx, sy = d.get("size", (0, 0))
-            # For rotated pads, bbox must enclose the rotated rectangle
-            angle = math.radians(d.get("orientation", 0))
-            if angle != 0:
-                cos_a, sin_a = abs(math.cos(angle)), abs(math.sin(angle))
-                rx = (sx * cos_a + sy * sin_a) / 2
-                ry = (sx * sin_a + sy * cos_a) / 2
-            else:
-                rx, ry = sx / 2, sy / 2
-        else:
-            rx = ry = d.get("width", d.get("drill", 0)) / 2
-        return (px - rx, py - ry, px + rx, py + ry)
-    elif t == "ZONE":
-        outline = d.get("_outline", [])
-        if outline:
-            xs = [p[0] for p in outline]
-            ys = [p[1] for p in outline]
-            return (min(xs), min(ys), max(xs), max(ys))
     return (0, 0, 0, 0)
 
 
@@ -706,7 +821,7 @@ def _build_connectivity(ItemList):
             points.append((d["position"], oid, "position", r))
         elif d["type"] == "PAD":
             sx, sy = d.get("size", (0, 0))
-            r = max(sx, sy) / 2 if sx or sy else d.get("drill", 0) / 2
+            r = min(sx, sy) / 2 if sx and sy else d.get("drill", 0) / 2
             points.append((d["position"], oid, "position", r))
 
     def _add_conn(oid_a, ep_a, oid_b, ep_b):
@@ -755,12 +870,24 @@ def _build_connectivity(ItemList):
                 _add_conn(pt_oid, ep, pad_oid, "position")
 
     # Wire-body connectivity: T-junctions, wire-through-pad, wire-through-zone
+    # For arcs, use pre-computed _midline_pts segments so that the
+    # straight-line distance checks work correctly.
     for wire_oid, wire_d in wires.items():
         wire_bbox = bboxes[wire_oid]
         wire_ls = layer_sets[wire_oid]
         wr = wire_d.get("width", 0) / 2
         sx, sy = wire_d["start"]
         ex, ey = wire_d["end"]
+
+        # Build list of line segments approximating this wire
+        midline = wire_d.get("_midline_pts")
+        if midline is not None and len(midline) > 2:
+            segments = [
+                (midline[k][0], midline[k][1], midline[k + 1][0], midline[k + 1][1])
+                for k in range(len(midline) - 1)
+            ]
+        else:
+            segments = None  # use (sx,sy,ex,ey) directly
 
         # T-junction: points landing on this wire's body
         for pos, pt_oid, ep, r in points:
@@ -775,7 +902,17 @@ def _build_connectivity(ItemList):
             if not _bboxes_overlap(wire_bbox, pt_bbox):
                 continue
             thr = (wr + r) ** 2
-            if _point_to_segment_dist_sq(pos[0], pos[1], sx, sy, ex, ey) <= thr:
+            if segments is None:
+                hit = _point_to_segment_dist_sq(pos[0], pos[1], sx, sy, ex, ey) <= thr
+            else:
+                hit = any(
+                    _point_to_segment_dist_sq(
+                        pos[0], pos[1], seg[0], seg[1], seg[2], seg[3]
+                    )
+                    <= thr
+                    for seg in segments
+                )
+            if hit:
                 ds = (pos[0] - sx) ** 2 + (pos[1] - sy) ** 2
                 de = (pos[0] - ex) ** 2 + (pos[1] - ey) ** 2
                 wire_ep = "start" if ds <= de else "end"
@@ -789,11 +926,16 @@ def _build_connectivity(ItemList):
                 continue
             if not _bboxes_overlap(wire_bbox, bboxes[pad_oid]):
                 continue
-            px, py = pad_d["position"]
-            pad_sx, pad_sy = pad_d.get("size", (0, 0))
-            pad_r = max(pad_sx, pad_sy) / 2
-            thr = (wr + pad_r) ** 2
-            if _point_to_segment_dist_sq(px, py, sx, sy, ex, ey) <= thr:
+            # Check if any point along the wire body lies within the pad shape
+            if segments is None:
+                wire_pts = [(sx, sy), (ex, ey), ((sx + ex) / 2, (sy + ey) / 2)]
+            else:
+                wire_pts = [(s[0], s[1]) for s in segments] + [
+                    (segments[-1][2], segments[-1][3])
+                ]
+            hit = any(_point_in_pad(pt, pad_d, margin=wr) for pt in wire_pts)
+            if hit:
+                px, py = pad_d["position"]
                 ds = (sx - px) ** 2 + (sy - py) ** 2
                 de = (ex - px) ** 2 + (ey - py) ** 2
                 wire_ep = "start" if ds <= de else "end"
@@ -813,8 +955,17 @@ def _build_connectivity(ItemList):
             hit = False
             for i in range(n):
                 ox, oy = outline[i]
-                px, py = outline[(i + 1) % n]
-                if _segments_dist_sq(sx, sy, ex, ey, ox, oy, px, py) <= thr:
+                qx, qy = outline[(i + 1) % n]
+                if segments is None:
+                    d_sq = _segments_dist_sq(sx, sy, ex, ey, ox, oy, qx, qy)
+                else:
+                    d_sq = min(
+                        _segments_dist_sq(
+                            seg[0], seg[1], seg[2], seg[3], ox, oy, qx, qy
+                        )
+                        for seg in segments
+                    )
+                if d_sq <= thr:
                     hit = True
                     break
             if hit:
@@ -846,7 +997,3 @@ def _build_connectivity(ItemList):
                     ItemList[pt_oid][conn_key].append(zone_oid)
                 if pt_oid not in zone_d["conn_start"]:
                     zone_d["conn_start"].append(pt_oid)
-
-    # Remove internal data
-    for d in ItemList.values():
-        d.pop("_outline", None)

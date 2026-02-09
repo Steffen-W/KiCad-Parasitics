@@ -1,8 +1,7 @@
+import logging
 import numpy as np
 import os
 import math
-import time
-import traceback
 
 try:
     from .Get_Distance import (
@@ -32,6 +31,8 @@ except ImportError:
         analyze_coplanar,
     )
     import ngspyce
+
+log = logging.getLogger(__name__)
 
 
 def analyze_trace(length, width, cu_layer_id, CuStack, frequency=100e6):
@@ -152,9 +153,7 @@ def analyze_trace(length, width, cu_layer_id, CuStack, frequency=100e6):
     }
 
 
-def _run_spice(
-    filename, elements, conn1, conn2, ac_freq=None, debug=0, debug_print=None
-):
+def _run_spice(filename, elements, conn1, conn2, ac_freq=None):
     """Write netlist, run simulation, return impedance.
 
     Args:
@@ -165,8 +164,6 @@ def _run_spice(
         For AC: complex impedance in Ohm (complex)
         On error: -1
     """
-    debug_print = debug_print or (lambda _: None)
-
     Rshunt = 0.1
     with open(filename, "w") as f:
         f.write("* Parasitic Network\n")
@@ -178,12 +175,10 @@ def _run_spice(
             f.write(f".ac lin 1 {ac_freq} {ac_freq}\n")
         f.write(".end\n")
 
-    if debug:
-        mode = f"AC @ {ac_freq:.0f} Hz" if ac_freq else "DC"
-        debug_print(
-            f"[{time.strftime('%H:%M:%S')}] [SPICE] {mode}: {len(elements)} elements, "
-            f"conn {conn1} <-> {conn2}"
-        )
+    mode = f"AC @ {ac_freq:.0f} Hz" if ac_freq else "DC"
+    log.info(
+        "[SPICE] %s: %d elements, conn %s <-> %s", mode, len(elements), conn1, conn2
+    )
 
     ngspyce.source(filename)
     if ac_freq:
@@ -192,23 +187,23 @@ def _run_spice(
         ngspyce.dc("v1", 1, 1, 1)
     os.remove(filename)
 
-    if debug:
-        debug_print(f"[{time.strftime('%H:%M:%S')}] [SPICE] done")
+    log.info("[SPICE] done")
 
     vout = ngspyce.vector(str(conn2))
     if len(vout) > 0 and vout[0] != 0:
         z = (1 - vout[0]) / (vout[0] / Rshunt)
-        if debug:
-            if ac_freq and isinstance(z, complex):
-                debug_print(
-                    f"[SPICE]   vout={vout[0]:.6e}, Z={abs(z) * 1000:.3f} mOhm "
-                    f"({z.real * 1000:.3f} + j{z.imag * 1000:.3f} mΩ)"
-                )
-            else:
-                debug_print(f"[SPICE]   vout={vout[0]:.6e}, Z={abs(z) * 1000:.3f} mOhm")
+        if ac_freq and isinstance(z, complex):
+            log.info(
+                "[SPICE]   vout=%s, Z=%.3f mOhm (%.3f + j%.3f mΩ)",
+                f"{vout[0]:.6e}",
+                abs(z) * 1000,
+                z.real * 1000,
+                z.imag * 1000,
+            )
+        else:
+            log.info("[SPICE]   vout=%s, Z=%.3f mOhm", f"{vout[0]:.6e}", abs(z) * 1000)
         return z  # Return complex for AC, real for DC
-    if debug:
-        debug_print(f"[SPICE]   vout={vout}, simulation failed")
+    log.warning("[SPICE]   vout=%s, simulation failed", vout)
     return -1
 
 
@@ -218,8 +213,6 @@ def RunSimulation(
     conn2,
     network_info=None,
     frequencies=None,
-    debug=0,
-    debug_print=None,
 ):
     """Run DC simulation and optionally AC simulations at given frequencies.
 
@@ -227,17 +220,13 @@ def RunSimulation(
         r_dc: DC resistance in Ohm
         z_ac: dict {freq: impedance} for each frequency (empty if no frequencies)
     """
-    debug_print = debug_print or (lambda _: None)
-
     # https://github.com/ignamv/ngspyce/
     filename = os.path.join(os.path.dirname(__file__), "TempNetlist.net")
     gnd = 0
 
     # --- DC: R-only network ---
     dc_elements = [("R", r[0], r[1], r[2]) for r in resistors]
-    r_dc = _run_spice(
-        filename, dc_elements, conn1, conn2, debug=debug, debug_print=debug_print
-    )
+    r_dc = _run_spice(filename, dc_elements, conn1, conn2)
 
     # --- AC: RLC network per frequency ---
     z_ac = {}
@@ -293,15 +282,7 @@ def RunSimulation(
                 R = elem["resistance"]
                 ac.append(("R", n1, n2, R))
 
-        z_ac[freq] = _run_spice(
-            filename,
-            ac,
-            conn1,
-            conn2,
-            ac_freq=freq,
-            debug=debug,
-            debug_print=debug_print,
-        )
+        z_ac[freq] = _run_spice(filename, ac, conn1, conn2, ac_freq=freq)
 
     return r_dc, z_ac
 
@@ -318,15 +299,13 @@ def Get_shortest_path_RES(path, resistors):
     return RES
 
 
-def extract_network(data, CuStack, netcode=None, debug=0, debug_print=None):
+def extract_network(data, CuStack, netcode=None):
     """Extract electrical network from PCB data (DC resistances only).
 
     Args:
         data: PCB element data dictionary
         CuStack: Copper stackup information
         netcode: KiCad net code to filter elements (None = use all elements)
-        debug: Debug level (0=off, 1=on)
-        debug_print: Optional debug print function
 
     Returns:
         dict with:
@@ -336,8 +315,6 @@ def extract_network(data, CuStack, netcode=None, debug=0, debug_print=None):
             area: dict {layer: area}
             graph: adjacency dict from get_graph_from_edges
     """
-    if debug_print is None:
-        debug_print = print if debug else lambda _: None
 
     resistors = []
     network_info = []
@@ -354,7 +331,7 @@ def extract_network(data, CuStack, netcode=None, debug=0, debug_print=None):
             nodes = []
             for layer in d["layer"]:
                 if layer not in CuStack:
-                    debug_print(f"WARNING: Layer {layer} not in CuStack, skipping")
+                    log.warning("Layer %s not in CuStack, skipping", layer)
                     continue
                 if layer in d.get("net_start", {}):
                     node = d["net_start"][layer]
@@ -375,8 +352,8 @@ def extract_network(data, CuStack, netcode=None, debug=0, debug_print=None):
                     for j in range(i + 1, len(nodes)):
                         Layer2, node2 = nodes[j]
                         if Layer2 not in CuStack or Layer1 not in CuStack:
-                            debug_print(
-                                f"ERROR: CuStack incomplete for layers {Layer1}, {Layer2}"
+                            log.error(
+                                "CuStack incomplete for layers %s, %s", Layer1, Layer2
                             )
                             continue
                         if "drill" not in d:
@@ -406,12 +383,12 @@ def extract_network(data, CuStack, netcode=None, debug=0, debug_print=None):
                             }
                         )
 
-        else:
+        elif len(d["layer"]) == 1:
             Layer = d["layer"][0]
             Area[Layer] += d["area"]
 
             if Layer not in CuStack:
-                debug_print(f"WARNING: Layer {Layer} not in CuStack, skipping element")
+                log.warning("Layer %s not in CuStack, skipping element", Layer)
                 continue
 
             if d["type"] == "WIRE":
@@ -419,9 +396,12 @@ def extract_network(data, CuStack, netcode=None, debug=0, debug_print=None):
                 netEnd = d["net_end"].get(Layer, 0)
 
                 if netStart == 0 or netEnd == 0:
-                    debug_print(
-                        f"[DEBUG] Skipping WIRE: netStart={netStart}, netEnd={netEnd}, "
-                        f"connStart={d.get('connStart', [])}, connEnd={d.get('connEnd', [])}"
+                    log.debug(
+                        "Skipping WIRE: netStart=%s, netEnd=%s, connStart=%s, connEnd=%s",
+                        netStart,
+                        netEnd,
+                        d.get("connStart", []),
+                        d.get("connEnd", []),
                     )
                     continue
 
@@ -441,7 +421,7 @@ def extract_network(data, CuStack, netcode=None, debug=0, debug_print=None):
                     "start": d["start"],
                     "end": d["end"],
                 }
-                for key in ("mid", "radius", "angle"):
+                for key in ("mid", "radius", "angle", "_midline_pts"):
                     if key in d:
                         info[key] = d[key]
                 network_info.append(info)
@@ -553,22 +533,17 @@ def extract_network(data, CuStack, netcode=None, debug=0, debug_print=None):
     }
 
 
-def find_path(network, conn1, conn2, debug=0, debug_print=None):
+def find_path(network, conn1, conn2):
     """Find shortest path between two nodes in the network.
 
     Args:
         network: dict from extract_network()
         conn1: First connection point (node ID)
         conn2: Second connection point (node ID)
-        debug: Debug level (0=off, 1=on)
-        debug_print: Optional debug print function
 
     Returns:
         (distance, path, short_path_resistance)
     """
-    if debug_print is None:
-        debug_print = print if debug else lambda _: None
-
     graph = network["graph"]
     resistors = network["resistors"]
     edges = [(i[0], i[1], i[3]) for i in resistors]
@@ -580,22 +555,20 @@ def find_path(network, conn1, conn2, debug=0, debug_print=None):
         short_path_res = -1
         distance = float("inf")
         path = []
-        debug_print(f"[DEBUG] Path finding failed: {e}")
-        debug_print(f"[DEBUG] Graph: {len(graph)} nodes, {len(edges)} edges")
+        log.debug("Path finding failed: %s", e)
+        log.debug("Graph: %d nodes, %d edges", len(graph), len(edges))
         if conn1 not in graph:
-            debug_print(f"[DEBUG] conn1={conn1} NOT in graph")
+            log.debug("conn1=%s NOT in graph", conn1)
         if conn2 not in graph:
-            debug_print(f"[DEBUG] conn2={conn2} NOT in graph")
+            log.debug("conn2=%s NOT in graph", conn2)
         if conn1 in graph and conn2 in graph:
             reachable = find_all_reachable_nodes(graph, conn1)
-            debug_print(f"[DEBUG] conn2 reachable from conn1: {conn2 in reachable}")
+            log.debug("conn2 reachable from conn1: %s", conn2 in reachable)
 
     return distance, path, short_path_res
 
 
-def simulate_network(
-    network, conn1, conn2, CuStack, frequencies=None, debug=0, debug_print=None
-):
+def simulate_network(network, conn1, conn2, CuStack, frequencies=None):
     """Run DC simulation and optionally AC simulations with HF parameters.
 
     If frequencies are given, computes HF parameters via analyze_trace for each
@@ -607,16 +580,11 @@ def simulate_network(
         conn2: Second connection point (node ID)
         CuStack: Copper stackup information
         frequencies: list of frequencies in Hz for HF analysis
-        debug: Debug level (0=off, 1=on)
-        debug_print: Optional debug print function
 
     Returns:
         (resistance_dc, impedance_ac, network_info)
         network_info is enriched with "hf" key for WIRE elements if frequencies given.
     """
-    if debug_print is None:
-        debug_print = print if debug else lambda _: None
-
     resistors = network["resistors"]
     network_info = network["network_info"]
 
@@ -631,10 +599,13 @@ def simulate_network(
             )
             wr = hf[f].get("wavelength_ratio")
             if wr and wr > 0.05:
-                debug_print(
-                    f"WARNING: WIRE {elem['layer_name']} "
-                    f"L={elem['length'] * 1000:.2f}mm is {wr:.2f}λ at {f / 1e6:.0f}MHz "
-                    f"(> λ/20, should be segmented)"
+                log.info(
+                    "WIRE %s L=%.2fmm is %.2fλ at %.0fMHz (> λ/20, segmented into %d parts)",
+                    elem["layer_name"],
+                    elem["length"] * 1000,
+                    wr,
+                    f / 1e6,
+                    max(1, int(wr / 0.05) + 1),
                 )
         elem["hf"] = hf
 
@@ -645,14 +616,11 @@ def simulate_network(
             conn2,
             network_info,
             frequencies,
-            debug=debug,
-            debug_print=debug_print,
         )
     except Exception:
         resistance_dc = -1
         impedance_ac = {}
-        print(traceback.format_exc())
-        print("ERROR in RunSimulation")
+        log.exception("RunSimulation failed")
 
     return resistance_dc, impedance_ac, network_info
 

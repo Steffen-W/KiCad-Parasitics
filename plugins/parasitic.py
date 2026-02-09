@@ -5,7 +5,6 @@ import warnings
 import traceback
 import math
 import json
-import time
 import logging
 import wx
 
@@ -29,9 +28,15 @@ except ImportError:
     from Get_Parasitic import extract_network, find_path, simulate_network
     from network_display import format_network_info
 
+log = logging.getLogger(__name__)
+
 
 def analyze_pcb_parasitic(
-    data, CuStack, element1, element2, frequencies=None, debug=0, debug_print=None
+    data,
+    CuStack,
+    element1,
+    element2,
+    frequencies=None,
 ):
     """Analyze parasitic resistance/impedance between two PCB elements.
 
@@ -40,16 +45,11 @@ def analyze_pcb_parasitic(
         CuStack: Copper stackup from Get_PCB_Stackup_fun()
         element1, element2: Selected element dicts
         frequencies: List of frequencies for AC analysis (Hz)
-        debug: Enable debug output
-        debug_print: Custom print function
 
     Returns:
         dict with: resistance_dc, impedance_ac, distance, short_path_resistance,
                    area, network_info, graph, path, conn1, conn2, error
     """
-    if debug_print is None:
-        debug_print = print if debug else lambda x: None
-
     result = {
         "resistance_dc": None,
         "impedance_ac": {},
@@ -65,7 +65,7 @@ def analyze_pcb_parasitic(
     }
 
     # Extract network ONCE (DC only, no HF calculation)
-    network = extract_network(data, CuStack, debug=debug, debug_print=debug_print)
+    network = extract_network(data, CuStack)
 
     # Find best path across all layer combinations (fast, no simulation)
     best_distance = float("inf")
@@ -98,23 +98,23 @@ def analyze_pcb_parasitic(
     result["conn1"], result["conn2"] = conn1, conn2
 
     # Get full path info for best connection
-    Distance, path, short_path_RES = find_path(
-        network, conn1, conn2, debug=debug, debug_print=debug_print
-    )
+    Distance, path, short_path_RES = find_path(network, conn1, conn2)
 
-    if debug:
-        debug_print(
-            f"[{time.strftime('%H:%M:%S')}] Best path: conn1={conn1}, conn2={conn2}, "
-            f"layers={best_conn[2]}/{best_conn[3]}, distance={best_distance * 1000:.3f}mm"
-        )
+    log.info(
+        "Best path: conn1=%s, conn2=%s, layers=%s/%s, distance=%.3fmm",
+        conn1,
+        conn2,
+        best_conn[2],
+        best_conn[3],
+        best_distance * 1000,
+    )
 
     if math.isinf(Distance):
         result["error"] = "No path found between selected elements. Check connectivity."
-        print(f"Error: {result['error']}")
+        log.error("%s", result["error"])
         return result
 
-    if debug:
-        debug_print(f"[{time.strftime('%H:%M:%S')}] simulate_network start")
+    log.debug("simulate_network start")
 
     # Simulate with HF parameters
     Resistance, Z_ac, network_info = simulate_network(
@@ -123,12 +123,9 @@ def analyze_pcb_parasitic(
         conn2,
         CuStack,
         frequencies=frequencies,
-        debug=debug,
-        debug_print=debug_print,
     )
 
-    if debug:
-        debug_print(f"[{time.strftime('%H:%M:%S')}] simulate_network done")
+    log.debug("simulate_network done")
 
     result.update(
         {
@@ -145,7 +142,7 @@ def analyze_pcb_parasitic(
     return result
 
 
-def format_result_message(result, CuStack, debug_log_file=None, net_tie_info=None):
+def format_result_message(result, CuStack, net_tie_info=None):
     """Format analysis result as human-readable message."""
     lines = []
 
@@ -173,8 +170,11 @@ def format_result_message(result, CuStack, debug_log_file=None, net_tie_info=Non
         lines.append(f"Shortest path resistance ≈ {short_path_RES * 1000:.3f} mΩ")
         if short_path_RES == 0:
             lines.append("(Zones treated as ideal conductors)")
-    elif debug_log_file:
-        lines.append(f"No connection found [DEBUG: {debug_log_file}]")
+    else:
+        log_file = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "debug_parasitic.log"
+        )
+        lines.append(f"No connection found [DEBUG: {log_file}]")
 
     # Build impedance table (DC + AC)
     has_valid_dc = (
@@ -346,18 +346,12 @@ class ResultDialog(wx.Dialog):
                 result["path"],
                 result["network_info"],
                 self.cu_stack,
-                debug=1,
             )
         except ImportError as e:
-            import sys
-
-            python_exe = sys.executable
             ind = {
                 "message": (
                     f"ERROR: {e}\n\n"
-                    f"Install missing packages with:\n"
-                    f"  {python_exe} -m pip install bfieldtools trimesh scipy\n\n"
-                    f"Alternatively, use the KiCad IPC API which manages\n"
+                    f"Use the KiCad IPC API which manages\n"
                     f"dependencies automatically:\n"
                     f"  KiCad -> Settings -> Plugins -> Enable KiCad API"
                 )
@@ -402,64 +396,39 @@ class ResultDialog(wx.Dialog):
         dlg.ShowModal()
         dlg.Destroy()
 
-    @staticmethod
-    def _show_debug_plots(debug_data, segments):
+    def _show_debug_plots(self, debug_data, segments):
         try:
             try:
                 from .calc_inductance import show_debug_plots
             except ImportError:
                 from calc_inductance import show_debug_plots
-            show_debug_plots(debug_data, segments)
+            show_debug_plots(debug_data, segments, parent=None)
         except Exception:
             pass
 
 
-def SaveDictToFile(dict_name, filename):
+def SaveDictToFile(data, filename):
     with open(filename, "w") as f:
-        f.write("data = {\n")
-        for uuid, d in list(dict_name.items()):
-            f.write(str(uuid))
-            f.write(":")
-            f.write(str(d))
-            f.write(",\n")
-        f.write("}")
+        json.dump(data, f, indent=2, default=str)
 
 
 def run_plugin(ItemList, CuStack):
     try:
         plugin_path = os.path.dirname(os.path.abspath(__file__))
-        debug = 0
-        debug_log_file = None
-        if debug:
-            debug_log_file = os.path.join(plugin_path, "parasitics_debug.log")
-            with open(debug_log_file, "w") as f:
-                f.write(
-                    "=" * 60 + "\nParasitics Plugin Debug Log\n" + "=" * 60 + "\n\n"
-                )
-
-        def debug_print(msg):
-            if debug:
-                print(msg)
-                if debug_log_file:
-                    try:
-                        with open(debug_log_file, "a", encoding="utf-8") as f:
-                            f.write(msg + "\n")
-                    except Exception:
-                        pass
 
         net_tie_info = ItemList.pop("_net_tie_info", None)
 
-        debug_print(f"[DEBUG] Found {len(ItemList)} PCB elements")
-
-        if debug:
-            save_file = os.path.join(plugin_path, "ItemList.py")
-            SaveDictToFile(ItemList, save_file)
+        log.info("Found %d PCB elements", len(ItemList))
 
         data = Connect_Nets(ItemList)
 
+        if log.isEnabledFor(logging.INFO):
+            save_file = os.path.join(plugin_path, "debug_ItemList.json")
+            SaveDictToFile(data, save_file)
+
         # Get selected elements
         Selected = [d for d in data.values() if d["is_selected"]]
-        debug_print(f"[DEBUG] Found {len(Selected)} selected elements")
+        log.info("Found %d selected elements", len(Selected))
 
         analysis_result = None
 
@@ -474,21 +443,32 @@ def run_plugin(ItemList, CuStack):
                 Selected[0],
                 Selected[1],
                 frequencies=frequencies,
-                debug=debug,
-                debug_print=debug_print,
             )
 
             # Save debug info
-            if debug and result["network_info"]:
+            if result["network_info"] and log.isEnabledFor(logging.INFO):
                 try:
-                    with open(os.path.join(plugin_path, "network_info.json"), "w") as f:
-                        json.dump(result["network_info"], f, indent=2)
+                    with open(
+                        os.path.join(plugin_path, "debug_network_info.json"), "w"
+                    ) as f:
+                        cleaned = [
+                            {k: v for k, v in e.items() if k != "hf"}
+                            for e in result["network_info"]
+                        ]
+                        txt = json.dumps(cleaned, indent=1)
+                        # Collapse short arrays (coordinates etc.) onto single lines
+                        import re
+
+                        txt = re.sub(
+                            r"\[\s+(-?[\d.e+\-]+),\s+(-?[\d.e+\-]+)\s+\]",
+                            r"[\1, \2]",
+                            txt,
+                        )
+                        f.write(txt)
                 except Exception:
                     pass
 
-            message = format_result_message(
-                result, CuStack, debug_log_file, net_tie_info=net_tie_info
-            )
+            message = format_result_message(result, CuStack, net_tie_info=net_tie_info)
             network_debug_text = None
             if result["network_info"]:
                 network_debug_text = (
@@ -500,7 +480,7 @@ def run_plugin(ItemList, CuStack):
                 )
             analysis_result = result
 
-        debug_print(f"[{time.strftime('%H:%M:%S')}] Opening dialog")
+        log.info("Opening dialog")
         dlg = ResultDialog(
             None,
             message,
@@ -526,16 +506,29 @@ if __name__ == "__main__":
         level=logging.DEBUG,
         format="%(asctime)s %(levelname)s [%(filename)s:%(lineno)d]: %(message)s",
         filename=os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "parasitic.log"
+            os.path.dirname(os.path.abspath(__file__)), "debug_parasitic.log"
         ),
         filemode="w",
     )
-    logging.info("parasitic.py started")
+    # Suppress noisy third-party debug output
+    for _logger_name in (
+        "matplotlib",
+        "matplotlib.font_manager",
+        "matplotlib.ticker",
+        "matplotlib.colorbar",
+        "matplotlib.backends",
+        "pynng",
+        "pynng.nng",
+        "ngspyce",
+        "sharedspice",
+    ):
+        logging.getLogger(_logger_name).setLevel(logging.WARNING)
+    logging.debug("parasitic.py started")
 
     app = wx.App()
     try:
         kicad = KiCad()
-        logging.info(f"Connected to KiCad {kicad.get_version()}")
+        logging.debug("Connected to KiCad %s", kicad.get_version())
 
         try:
             board = kicad.get_board()
@@ -544,16 +537,18 @@ if __name__ == "__main__":
             print("Error: No PCB board found. Is a board open in KiCad?")
             sys.exit(1)
         board_FileName = board.document.board_filename
-        logging.info(f"Board: {board.document.board_filename}")
+        logging.debug("Board: %s", board.document.board_filename)
 
         from Get_PCB_Elements_IPC import Get_PCB_Elements_IPC
         from Get_PCB_Stackup_IPC import Get_PCB_Stackup_IPC
 
         ItemList = Get_PCB_Elements_IPC(board)
-        logging.info("Got %d elements from IPC API", len(ItemList))
+        logging.debug("Got %d elements from IPC API", len(ItemList))
 
         CuStack = Get_PCB_Stackup_IPC(board)
         run_plugin(ItemList, CuStack)
+        # Keep event loop alive for any open PlotFrame windows
+        app.MainLoop()
     except errors.ConnectionError:
         logging.exception("ConnectionError")
         print("ConnectionError: Failed to connect to KiCad. Is KiCad running?")
