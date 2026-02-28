@@ -101,18 +101,19 @@ def _obj_id(obj):
 def _arc_geometry(start, end, mid):
     """Compute arc radius, sweep angle and arc length from three points (m).
 
-    Returns (radius, angle, arc_length) where angle is the signed sweep
-    in radians (positive = CCW, negative = CW).
-    Falls back to (None, 0, chord) if the three points are collinear.
+    Returns (radius, angle, arc_length, center, start_angle) where angle is
+    the signed sweep in radians (positive = CCW, negative = CW).
+    center is (ux, uy) and start_angle the angle of the start point.
+    Falls back to (None, 0, chord, None, None) if the three points are collinear.
+    center and start_angle are always both None or both set.
     """
     sx, sy = start
     mx, my = mid
     ex, ey = end
     D = 2 * (sx * (my - ey) + mx * (ey - sy) + ex * (sy - my))
     if abs(D) < 1e-30:
-        # Collinear
         chord = math.hypot(ex - sx, ey - sy)
-        return None, 0.0, chord
+        return None, 0.0, chord, None, None
 
     ux = (
         (sx * sx + sy * sy) * (my - ey)
@@ -147,7 +148,7 @@ def _arc_geometry(start, end, mid):
         sweep = -(a_start_cw - a_end)
 
     arc_length = abs(sweep) * r
-    return r, sweep, arc_length
+    return r, sweep, arc_length, (ux, uy), a_start
 
 
 def _cu_layers(layers, enabled_layers=None):
@@ -279,7 +280,7 @@ def _collect_footprint_shapes(fp, enabled_layers):
             start = _pos_m(shape.start)
             end = _pos_m(shape.end)
             mid = _pos_m(shape.mid)
-            r_m, angle, arc_length = _arc_geometry(start, end, mid)
+            r_m, angle, arc_length, center, arc_sa = _arc_geometry(start, end, mid)
             if arc_length == 0:
                 continue
             item = {
@@ -302,41 +303,11 @@ def _collect_footprint_shapes(fp, enabled_layers):
             }
             if r_m is not None:
                 item["radius"] = r_m
-                # Compute center from 3-point circumcircle for _arc_points
-                sx, sy = start
-                mx, my = mid
-                ex, ey = end
-                D = 2 * (sx * (my - ey) + mx * (ey - sy) + ex * (sy - my))
-                if abs(D) > 1e-30:
-                    ux = (
-                        (sx * sx + sy * sy) * (my - ey)
-                        + (mx * mx + my * my) * (ey - sy)
-                        + (ex * ex + ey * ey) * (sy - my)
-                    ) / D
-                    uy = (
-                        (sx * sx + sy * sy) * (ex - mx)
-                        + (mx * mx + my * my) * (sx - ex)
-                        + (ex * ex + ey * ey) * (mx - sx)
-                    ) / D
-                    arc_sa = math.atan2(sy - uy, sx - ux)
+                if center is not None:
                     item["_midline_pts"] = [start] + _arc_points(
-                        (ux, uy), r_m, arc_sa, angle, width
+                        center, r_m, arc_sa, angle, width
                     )
-            # Build outline from midline
-            midline = item["_midline_pts"]
-            wr = width / 2
-            if len(midline) > 1:
-                left, right = [], []
-                for k in range(len(midline) - 1):
-                    sdx = midline[k + 1][0] - midline[k][0]
-                    sdy = midline[k + 1][1] - midline[k][1]
-                    ln = math.hypot(sdx, sdy) or 1e-30
-                    lnx, lny = -sdy / ln * wr, sdx / ln * wr
-                    left.append((midline[k][0] + lnx, midline[k][1] + lny))
-                    right.append((midline[k][0] - lnx, midline[k][1] - lny))
-                left.append((midline[-1][0] + lnx, midline[-1][1] + lny))
-                right.append((midline[-1][0] - lnx, midline[-1][1] - lny))
-                item["_outline"] = left + right[::-1]
+            item["_outline"] = _outline_from_midline(item["_midline_pts"], width / 2)
             items[oid] = item
 
     return items
@@ -419,33 +390,26 @@ def Get_PCB_Elements_IPC(board: Board):
 
         if isinstance(track, ArcTrack):
             mid = _pos_m(track.mid)
-            arc_center = (_to_m(track.center.x), _to_m(track.center.y))
+            arc_center_v = track.center()
+            if arc_center_v is None:
+                raise ValueError(f"ArcTrack {track} returned None center")
+            arc_center = (_to_m(arc_center_v.x), _to_m(arc_center_v.y))
             arc_radius = _to_m(track.radius())
-            arc_sweep = track.angle()  # radians, signed
-            arc_start_angle = track.start_angle()  # radians
+            arc_sweep = track.angle()
+            arc_start_angle = track.start_angle()
+            if arc_sweep is None or arc_start_angle is None:
+                raise ValueError(f"ArcTrack {track} returned None angle/start_angle")
             arc_length = abs(arc_sweep) * arc_radius
             midline = [start] + _arc_points(
                 arc_center, arc_radius, arc_start_angle, arc_sweep, width
             )
             temp["mid"] = mid
+            temp["radius"] = arc_radius
             temp["angle"] = arc_sweep
             temp["length"] = arc_length
             temp["area"] = width * arc_length
-            temp["radius"] = arc_radius
             temp["_midline_pts"] = midline
-            # Build outline from midline
-            wr = width / 2
-            left, right = [], []
-            for k in range(len(midline) - 1):
-                sdx = midline[k + 1][0] - midline[k][0]
-                sdy = midline[k + 1][1] - midline[k][1]
-                ln = math.hypot(sdx, sdy) or 1e-30
-                nx, ny = -sdy / ln * wr, sdx / ln * wr
-                left.append((midline[k][0] + nx, midline[k][1] + ny))
-                right.append((midline[k][0] - nx, midline[k][1] - ny))
-            left.append((midline[-1][0] + nx, midline[-1][1] + ny))
-            right.append((midline[-1][0] - nx, midline[-1][1] - ny))
-            temp["_outline"] = left + right[::-1]
+            temp["_outline"] = _outline_from_midline(midline, width / 2)
         else:
             # Straight wire: simple outline and midline
             temp["_midline_pts"] = [start, end]
@@ -719,6 +683,27 @@ def _arc_points(center, radius, start_angle, sweep, width=0.0):
         points.append((cx + radius * math.cos(angle), cy + radius * math.sin(angle)))
 
     return points
+
+
+def _outline_from_midline(midline, half_width):
+    """Build a closed outline polygon from a midline polyline.
+
+    Returns [] for midlines shorter than 2 points.
+    """
+    if len(midline) < 2:
+        return []
+    lnx, lny = 0.0, 0.0
+    left, right = [], []
+    for k in range(len(midline) - 1):
+        sdx = midline[k + 1][0] - midline[k][0]
+        sdy = midline[k + 1][1] - midline[k][1]
+        ln = math.hypot(sdx, sdy) or 1e-30
+        lnx, lny = -sdy / ln * half_width, sdx / ln * half_width
+        left.append((midline[k][0] + lnx, midline[k][1] + lny))
+        right.append((midline[k][0] - lnx, midline[k][1] - lny))
+    left.append((midline[-1][0] + lnx, midline[-1][1] + lny))
+    right.append((midline[-1][0] - lnx, midline[-1][1] - lny))
+    return left + right[::-1]
 
 
 def _compute_bbox(d):
