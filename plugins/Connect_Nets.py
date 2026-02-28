@@ -1,5 +1,8 @@
+import logging
 from collections import defaultdict
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 try:
     from .pcb_types import WIRE, ZONE
@@ -186,5 +189,7 @@ def Connect_Nets(data: dict[Any, dict[str, Any]]) -> dict[Any, dict[str, Any]]:
         # Stop if nothing changed (converged)
         if not changed:
             break
+    else:
+        log.warning("Connect_Nets did not converge after %d passes", _MAX_PASSES)
 
     return data

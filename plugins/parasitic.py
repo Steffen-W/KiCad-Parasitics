@@ -33,12 +33,12 @@ log = logging.getLogger(__name__)
 
 
 def analyze_pcb_parasitic(
-    data,
-    CuStack,
-    element1,
-    element2,
-    frequencies=None,
-):
+    data: dict,
+    CuStack: dict,
+    element1: dict,
+    element2: dict,
+    frequencies: list[float] | None = None,
+) -> dict:
     """Analyze parasitic resistance/impedance between two PCB elements.
 
     Args:
@@ -143,7 +143,9 @@ def analyze_pcb_parasitic(
     return result
 
 
-def format_result_message(result, CuStack, net_tie_info=None):
+def format_result_message(
+    result: dict, CuStack: dict, net_tie_info: dict | None = None
+) -> str:
     """Format analysis result as human-readable message."""
     lines = []
 
@@ -235,7 +237,7 @@ _SI_PREFIXES = [
 ]
 
 
-def format_si(value, unit, precision=3):
+def format_si(value: float, unit: str, precision: int = 3) -> str:
     """Format value with SI prefix (µ, m, k, M, G, etc.).
 
     Args:
@@ -260,8 +262,13 @@ class ResultDialog(wx.Dialog):
     """Dialog to show analysis results with optional details."""
 
     def __init__(
-        self, parent, message, debug_text=None, analysis_result=None, cu_stack=None
-    ):
+        self,
+        parent: wx.Window | None,
+        message: str,
+        debug_text: tuple | str | None = None,
+        analysis_result: dict | None = None,
+        cu_stack: dict | None = None,
+    ) -> None:
         super().__init__(
             parent,
             title="Analysis result",
@@ -296,7 +303,7 @@ class ResultDialog(wx.Dialog):
         self.SetSizerAndFit(sizer)
         self.SetMinSize(wx.Size(400, 150))
 
-    def _on_details(self, _event):
+    def _on_details(self, _event: wx.CommandEvent) -> None:
         if isinstance(self.debug_text, tuple):
             ni, g, p, c1, c2 = self.debug_text
             txt = f"Measuring resistance: n{c1} <-> n{c2}\n" + format_network_info(
@@ -335,7 +342,7 @@ class ResultDialog(wx.Dialog):
         dlg.ShowModal()
         dlg.Destroy()
 
-    def _on_calc_inductance(self, _event):
+    def _on_calc_inductance(self, _event: wx.CommandEvent) -> None:
         result = self.analysis_result
         if not result:
             return
@@ -398,7 +405,7 @@ class ResultDialog(wx.Dialog):
         dlg.ShowModal()
         dlg.Destroy()
 
-    def _show_debug_plots(self, debug_data, segments):
+    def _show_debug_plots(self, debug_data: dict, segments: list[dict]) -> None:
         try:
             try:
                 from .calc_inductance import show_debug_plots
@@ -409,12 +416,12 @@ class ResultDialog(wx.Dialog):
             pass
 
 
-def SaveDictToFile(data, filename):
+def SaveDictToFile(data: dict, filename: str) -> None:
     with open(filename, "w") as f:
         json.dump(data, f, indent=2, default=str)
 
 
-def run_plugin(ItemList, CuStack):
+def run_plugin(ItemList: dict, CuStack: dict) -> None:
     try:
         plugin_path = os.path.dirname(os.path.abspath(__file__))
 
@@ -424,7 +431,7 @@ def run_plugin(ItemList, CuStack):
 
         data = Connect_Nets(ItemList)
 
-        if log.isEnabledFor(logging.INFO):
+        if os.environ.get("PARASITIC_DEBUG"):
             save_file = os.path.join(plugin_path, "debug_ItemList.json")
             SaveDictToFile(data, save_file)
 

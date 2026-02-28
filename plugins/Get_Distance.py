@@ -3,9 +3,11 @@ import math
 from collections import deque
 
 
-def dijkstra(graph, start_node):
+def dijkstra(
+    graph: dict[int, dict[int, float]], start_node: int
+) -> tuple[dict[int, float], dict[int, int | None]]:
     distance = {node: float("inf") for node in graph}
-    predecessor = {node: None for node in graph}
+    predecessor: dict[int, int | None] = {node: None for node in graph}
     distance[start_node] = 0
     queue = [(0, start_node)]
     while queue:
@@ -20,7 +22,9 @@ def dijkstra(graph, start_node):
     return distance, predecessor
 
 
-def find_all_reachable_nodes(graph, start_node):
+def find_all_reachable_nodes(
+    graph: dict[int, dict[int, float]], start_node: int
+) -> set[int]:
     """Find all nodes reachable from start_node using BFS."""
     if start_node not in graph:
         return set()
@@ -36,7 +40,9 @@ def find_all_reachable_nodes(graph, start_node):
     return visited
 
 
-def find_shortest_path(graph, start_node, end_node):
+def find_shortest_path(
+    graph: dict[int, dict[int, float]], start_node: int, end_node: int
+) -> tuple[float, list[int]]:
     """
     Find the shortest path between two nodes in a weighted graph.
 

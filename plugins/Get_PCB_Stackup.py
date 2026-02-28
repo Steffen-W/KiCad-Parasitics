@@ -1,5 +1,6 @@
 from os.path import exists
 from pathlib import Path
+from typing import Any
 
 try:
     from .s_expression_parse import parse_sexp
@@ -9,7 +10,7 @@ except ImportError:
 import re
 
 
-def extract_layer_from_string_old(input_string):  # kicad <9.0
+def extract_layer_from_string_old(input_string: str) -> int | None:  # kicad <9.0
     if input_string == "F.Cu":
         return 0
     elif input_string == "B.Cu":
@@ -21,7 +22,7 @@ def extract_layer_from_string_old(input_string):  # kicad <9.0
     return None
 
 
-def extract_layer_from_string(input_string):  # kicad >=9.0
+def extract_layer_from_string(input_string: str) -> int | None:  # kicad >=9.0
     # https://gitlab.com/kicad/code/kicad/-/commit/5e0abadb23425765e164f49ee2f893e94ddb97fc
     if input_string == "F.Cu":
         return 0
@@ -35,7 +36,7 @@ def extract_layer_from_string(input_string):  # kicad >=9.0
     return None
 
 
-def search_recursive(line: list, entry: str, all=False):
+def search_recursive(line: Any, entry: str, all: bool = False) -> Any:
     if isinstance(line[0], str) and line[0] == entry:
         if all:
             return line
@@ -51,8 +52,10 @@ def search_recursive(line: list, entry: str, all=False):
 
 
 def Get_PCB_Stackup_fun(
-    ProjectPath: str | Path = "./test.kicad_pcb", new_v9=True, board_thickness=None
-):
+    ProjectPath: str | Path = "./test.kicad_pcb",
+    new_v9: bool = True,
+    board_thickness: float | None = None,
+) -> dict[int, dict]:
     layers = []
     CuStack = {}
     parsed = None
@@ -98,7 +101,7 @@ def Get_PCB_Stackup_fun(
                     if t <= 0:
                         raise Exception("Problematic layer thickness detected")
 
-                    def _die_info(idx):
+                    def _die_info(idx: int) -> dict | None:
                         if 0 <= idx < len(layers):
                             d = layers[idx]
                             if d["type"] in ("core", "prepreg"):

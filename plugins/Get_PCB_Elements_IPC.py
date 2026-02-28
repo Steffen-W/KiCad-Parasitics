@@ -6,6 +6,7 @@ TODO:
 
 import logging
 import math
+from typing import Any
 
 from kipy.board import Board
 from kipy.board_types import ArcTrack, FootprintInstance
@@ -17,7 +18,7 @@ from pcb_types import WIRE, VIA, PAD, ZONE
 log = logging.getLogger(__name__)
 
 
-def _linearize_polyline(polyline, arc_steps=8):
+def _linearize_polyline(polyline: Any, arc_steps: int = 8) -> list[tuple[float, float]]:
     """Convert PolyLine nodes (points + arcs) to a list of (x, y) points in meters."""
     pts = []
     for node in polyline.nodes:
@@ -57,7 +58,7 @@ def _linearize_polyline(polyline, arc_steps=8):
     return pts
 
 
-def _shoelace_area(pts):
+def _shoelace_area(pts: list[tuple[float, float]]) -> float:
     """Signed area of polygon using shoelace formula (in m²)."""
     n = len(pts)
     if n < 3:
@@ -70,7 +71,7 @@ def _shoelace_area(pts):
     return area / 2
 
 
-def _polygon_area(poly):
+def _polygon_area(poly: Any) -> float:
     """Compute area of a PolygonWithHoles in m² (outline - holes)."""
     outline_pts = _linearize_polyline(poly.outline)
     area = abs(_shoelace_area(outline_pts))
@@ -80,26 +81,28 @@ def _polygon_area(poly):
     return max(area, 0.0)
 
 
-def _to_m(nm):
+def _to_m(nm: float) -> float:
     """Nanometer (kipy) → Meter."""
     return nm / 1e9
 
 
-def _pos_m(vec2):
+def _pos_m(vec2: Any) -> tuple[float, float]:
     """Vector2 → (x, y) in meters."""
     return (_to_m(vec2.x), _to_m(vec2.y))
 
 
-def _layer_v9(bl):
+def _layer_v9(bl: Any) -> int | None:
     """BoardLayer enum → v9 layer int (same numbering as Get_PCB_Stackup)."""
     return extract_layer_from_string(canonical_name(bl))
 
 
-def _obj_id(obj):
+def _obj_id(obj: Any) -> int:
     return obj.id.value
 
 
-def _arc_geometry(start, end, mid):
+def _arc_geometry(
+    start: tuple[float, float], end: tuple[float, float], mid: tuple[float, float]
+) -> tuple[float | None, float, float, tuple[float, float] | None, float | None]:
     """Compute arc radius, sweep angle and arc length from three points (m).
 
     Returns (radius, angle, arc_length, center, start_angle) where angle is
@@ -133,7 +136,7 @@ def _arc_geometry(start, end, mid):
     a_mid = math.atan2(my - uy, mx - ux)
     a_end = math.atan2(ey - uy, ex - ux)
 
-    def _norm(a, ref):
+    def _norm(a: float, ref: float) -> float:
         while a < ref:
             a += 2 * math.pi
         while a >= ref + 2 * math.pi:
@@ -152,7 +155,7 @@ def _arc_geometry(start, end, mid):
     return r, sweep, arc_length, (ux, uy), a_start
 
 
-def _cu_layers(layers, enabled_layers=None):
+def _cu_layers(layers: Any, enabled_layers: Any = None) -> list[int]:
     """Filter to copper layers and convert to v9 ints."""
     result = []
     for bl in layers:
@@ -165,7 +168,7 @@ def _cu_layers(layers, enabled_layers=None):
     return sorted(result)
 
 
-def _expand_nets_via_net_ties(board, initial_nets):
+def _expand_nets_via_net_ties(board: Board, initial_nets: Any) -> Any:
     """Expand a set of nets transitively through all Net Tie footprints.
 
     For each net, finds Net Tie footprints with pads on that net, adds the
@@ -223,7 +226,7 @@ def _expand_nets_via_net_ties(board, initial_nets):
     return expanded, net_tie_fps
 
 
-def _collect_footprint_shapes(fp, enabled_layers):
+def _collect_footprint_shapes(fp: FootprintInstance, enabled_layers: Any) -> dict:
     """Collect copper shapes from a footprint as WIRE elements.
 
     Returns:
@@ -305,6 +308,7 @@ def _collect_footprint_shapes(fp, enabled_layers):
             if r_m is not None:
                 item["radius"] = r_m
                 if center is not None:
+                    assert arc_sa is not None
                     item["_midline_pts"] = [start] + _arc_points(
                         center, r_m, arc_sa, angle, width
                     )
@@ -585,7 +589,9 @@ def Get_PCB_Elements_IPC(board: Board):
     return ItemList
 
 
-def _point_in_polygon(point, polygon):
+def _point_in_polygon(
+    point: tuple[float, float], polygon: list[tuple[float, float]]
+) -> bool:
     """Ray casting algorithm to check if point is inside polygon."""
     x, y = point
     n = len(polygon)
@@ -608,7 +614,9 @@ def _point_in_polygon(point, polygon):
     return inside
 
 
-def _point_to_segment_dist_sq(px, py, ax, ay, bx, by):
+def _point_to_segment_dist_sq(
+    px: float, py: float, ax: float, ay: float, bx: float, by: float
+) -> float:
     """Squared distance from point (px,py) to line segment (ax,ay)-(bx,by)."""
     dx, dy = bx - ax, by - ay
     len_sq = dx * dx + dy * dy
@@ -621,7 +629,16 @@ def _point_to_segment_dist_sq(px, py, ax, ay, bx, by):
     return dx2 * dx2 + dy2 * dy2
 
 
-def _segments_dist_sq(ax, ay, bx, by, cx, cy, dx, dy):
+def _segments_dist_sq(
+    ax: float,
+    ay: float,
+    bx: float,
+    by: float,
+    cx: float,
+    cy: float,
+    dx: float,
+    dy: float,
+) -> float:
     """Squared distance between segment (a,b) and segment (c,d)."""
     return min(
         _point_to_segment_dist_sq(ax, ay, cx, cy, dx, dy),
@@ -631,7 +648,9 @@ def _segments_dist_sq(ax, ay, bx, by, cx, cy, dx, dy):
     )
 
 
-def _point_near_polygon(point, polygon, margin):
+def _point_near_polygon(
+    point: tuple[float, float], polygon: list[tuple[float, float]], margin: float
+) -> bool:
     """Check if point is inside polygon or within margin of its edges."""
     if _point_in_polygon(point, polygon):
         return True
@@ -648,7 +667,13 @@ def _point_near_polygon(point, polygon, margin):
     return False
 
 
-def _arc_points(center, radius, start_angle, sweep, width=0.0):
+def _arc_points(
+    center: tuple[float, float],
+    radius: float,
+    start_angle: float,
+    sweep: float,
+    width: float = 0.0,
+) -> list[tuple[float, float]]:
     """Interpolate points along a circular arc from API data.
 
     Parameters
@@ -686,7 +711,9 @@ def _arc_points(center, radius, start_angle, sweep, width=0.0):
     return points
 
 
-def _outline_from_midline(midline, half_width):
+def _outline_from_midline(
+    midline: list[tuple[float, float]], half_width: float
+) -> list[tuple[float, float]]:
     """Build a closed outline polygon from a midline polyline.
 
     Returns [] for midlines shorter than 2 points.
@@ -707,7 +734,7 @@ def _outline_from_midline(midline, half_width):
     return left + right[::-1]
 
 
-def _compute_bbox(d):
+def _compute_bbox(d: dict) -> tuple[float, float, float, float]:
     """Compute bounding box (min_x, min_y, max_x, max_y) for an element."""
     if "_outline" in d:
         xs = [p[0] for p in d["_outline"]]
@@ -727,12 +754,16 @@ def _compute_bbox(d):
     return (0, 0, 0, 0)
 
 
-def _bboxes_overlap(a, b):
+def _bboxes_overlap(
+    a: tuple[float, float, float, float], b: tuple[float, float, float, float]
+) -> bool:
     """Check if two bounding boxes overlap."""
     return a[0] <= b[2] and a[2] >= b[0] and a[1] <= b[3] and a[3] >= b[1]
 
 
-def _point_in_pad(point, pad_data, margin=0):
+def _point_in_pad(
+    point: tuple[float, float], pad_data: dict, margin: float = 0
+) -> bool:
     """Check if point is within pad shape (circle/rect/oval) + margin.
 
     PadStackShape: 1=circle, 2=rect, 3=oval, 5=roundrect, 6=chamferedrect.
@@ -771,7 +802,7 @@ def _point_in_pad(point, pad_data, margin=0):
         return dx <= rx and dy <= ry
 
 
-def _build_connectivity(ItemList):
+def _build_connectivity(ItemList: dict) -> None:
     """Build conn_start/conn_end by matching coordinates.
 
     # TODO: Split into named sub-steps with guard clauses; function currently
@@ -813,7 +844,7 @@ def _build_connectivity(ItemList):
             r = min(sx, sy) / 2 if sx and sy else d.get("drill", 0) / 2
             points.append((d["position"], oid, "position", r))
 
-    def _add_conn(oid_a, ep_a, oid_b, ep_b):
+    def _add_conn(oid_a: int, ep_a: str, oid_b: int, ep_b: str) -> None:
         """Add bidirectional connection."""
         key_a = "conn_start" if ep_a in ("start", "position") else "conn_end"
         if oid_b not in ItemList[oid_a][key_a]:

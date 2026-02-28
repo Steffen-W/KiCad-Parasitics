@@ -8,7 +8,9 @@ except ImportError:
     from pcb_types import WIRE, VIA, ZONE
 
 
-def simplify_graph(graph, start, end):
+def simplify_graph(
+    graph: dict[int, dict[int, float]], start: int, end: int
+) -> tuple[dict[int, dict[int, float]], dict[tuple[int, int], list[int]]]:
     """Simplify graph by removing dead-ends and compressing chains.
 
     Args:
@@ -83,7 +85,9 @@ def simplify_graph(graph, start, end):
     return g, chain_map
 
 
-def find_parallel_paths(graph, path, max_paths=50):
+def find_parallel_paths(
+    graph: dict[int, dict[int, float]], path: list[int], max_paths: int = 50
+) -> list[list[int]]:
     """Find alternative paths between start and end via BFS.
 
     Expects a simplified graph (dead-ends removed, chains compressed).
@@ -133,7 +137,9 @@ def find_parallel_paths(graph, path, max_paths=50):
     return all_paths
 
 
-def render_network_ascii(graph, path, network_info):
+def render_network_ascii(
+    graph: dict[int, dict[int, float]], path: list[int], network_info: list[dict]
+) -> str:
     """Render network path with parallel branches as ASCII.
 
     Output structure:
@@ -151,18 +157,18 @@ def render_network_ascii(graph, path, network_info):
         n1, n2 = info["nodes"]
         res_lookup[(min(n1, n2), max(n1, n2))] = info
 
-    def get_res(a, b):
+    def get_res(a: int, b: int) -> float:
         key = (min(a, b), max(a, b))
         return res_lookup[key]["resistance"] if key in res_lookup else 0
 
-    def get_type(a, b):
+    def get_type(a: int, b: int) -> str:
         key = (min(a, b), max(a, b))
         return res_lookup[key]["type"][0] if key in res_lookup else "?"
 
     # Simplify graph before path search
     sgraph, chain_map = simplify_graph(graph, path[0], path[-1])
 
-    def expand_edge(a, b):
+    def expand_edge(a: int, b: int) -> list[int]:
         """Expand a simplified edge to full node list via chain_map."""
         key = (min(a, b), max(a, b))
         if key in chain_map:
@@ -172,7 +178,7 @@ def render_network_ascii(graph, path, network_info):
             return list(reversed(nodes))
         return [a, b]
 
-    def expand_path(p):
+    def expand_path(p: list[int]) -> list[int]:
         """Expand a simplified path to full node list."""
         if len(p) < 2:
             return p
@@ -182,7 +188,7 @@ def render_network_ascii(graph, path, network_info):
             full.extend(expanded[1:])
         return full
 
-    def path_res(p):
+    def path_res(p: list[int]) -> float:
         ep = expand_path(p)
         return sum(get_res(ep[i], ep[i + 1]) for i in range(len(ep) - 1))
 
@@ -255,7 +261,7 @@ def render_network_ascii(graph, path, network_info):
 
     merge_node = mids[0][-1]  # the node where all parallel paths rejoin
 
-    def chain_res(parent, chain):
+    def chain_res(parent: int, chain: list[int]) -> float:
         """Resistance of a chain of nodes starting from parent."""
         full = [parent]
         for node in chain:
@@ -263,7 +269,7 @@ def render_network_ascii(graph, path, network_info):
             full.extend(expanded[1:])
         return sum(get_res(full[i], full[i + 1]) for i in range(len(full) - 1))
 
-    def render_trie(node, parent, prefix_str):
+    def render_trie(node: dict, parent: int, prefix_str: str) -> None:
         """Recursively render trie branches.  parent = last printed node."""
         children = {k: v for k, v in node.items() if k != "_leaf"}
         child_list = sorted(children.keys())
@@ -327,7 +333,11 @@ def render_network_ascii(graph, path, network_info):
     return "\n".join(lines)
 
 
-def format_network_info(network_info, graph=None, path=None):
+def format_network_info(
+    network_info: list[dict],
+    graph: dict[int, dict[int, float]] | None = None,
+    path: list[int] | None = None,
+) -> str:
     """Format network info as human-readable string for debugging.
 
     Args:
@@ -375,7 +385,7 @@ def format_network_info(network_info, graph=None, path=None):
 if __name__ == "__main__":
     # Minimal test: dead-ends (7,8), chain compression (3,4), parallel branch (2→9→5)
     #   1→2→3→4→5→6   dead-end 3→7→8   parallel 2→9→5
-    def _w(n1, n2, r):
+    def _w(n1: int, n2: int, r: float) -> dict:
         return {
             "type": WIRE,
             "nodes": (n1, n2),

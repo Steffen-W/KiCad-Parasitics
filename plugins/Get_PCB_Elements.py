@@ -1,7 +1,7 @@
 import logging
 import numpy as np
 import pcbnew
-from typing import Any, overload, Sequence, Union
+from typing import Any, Iterable, overload, Sequence, Union
 
 try:
     from .pcb_types import WIRE, VIA, PAD, ZONE
@@ -17,7 +17,7 @@ def ToM(value: tuple) -> tuple[float, ...]: ...
 def ToM(value: int | float) -> float: ...
 
 
-def ToM(value):
+def ToM(value: Any) -> Any:
     """Convert KiCad internal units to meters (SI base unit)."""
     mm = pcbnew.ToMM(value)
     if isinstance(mm, tuple):
@@ -65,7 +65,7 @@ def getHash(obj: pcbnew.EDA_ITEM) -> int:
     return obj.m_Uuid.Hash()
 
 
-def getHashList(objlist) -> list[int]:
+def getHashList(objlist: Iterable[Any]) -> list[int]:
     return [getHash(obj) for obj in objlist]
 
 
@@ -85,13 +85,15 @@ def getLayer(obj: pcbnew.BOARD_ITEM, PossibleLayer: set[int] = {0, 31}) -> list[
 def getConnections(
     track: pcbnew.PCB_TRACK, connect: pcbnew.CONNECTIVITY_DATA
 ) -> tuple[list[int], list[int]]:
-    def getVectorLen(vector):
-        return np.sqrt(vector.dot(vector))
+    def getVectorLen(vector: np.ndarray) -> float:
+        return float(np.sqrt(vector.dot(vector)))
 
-    def getDistance(point1, point2):
+    def getDistance(point1: np.ndarray, point2: np.ndarray) -> float:
         return getVectorLen(np.array(point2) - np.array(point1))
 
-    def MoveToObjCenter(wirePos, width, objPos):
+    def MoveToObjCenter(
+        wirePos: np.ndarray, width: float, objPos: np.ndarray
+    ) -> np.ndarray:
         objPos = np.array(objPos)
         wirePos = np.array(wirePos)
 

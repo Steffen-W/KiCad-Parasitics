@@ -14,11 +14,15 @@ except Exception:
 
 import logging
 import math
+from typing import TYPE_CHECKING, Any
 import numpy as np
 import trimesh
 from scipy.spatial import cKDTree
 from bfieldtools.mesh_impedance import self_inductance_matrix
 from bfieldtools.utils import find_mesh_boundaries
+
+if TYPE_CHECKING:
+    import wx
 
 try:
     from .pcb_types import WIRE, VIA
@@ -35,7 +39,9 @@ _MAX_MESH_FACES = 5000
 # =========================================================================
 
 
-def calc_path_inductance(path, network_info, cu_stack):
+def calc_path_inductance(
+    path: list[int], network_info: list[dict], cu_stack: dict
+) -> dict:
     """Calculate the inductance of a PCB trace path.
 
     Parameters
@@ -68,7 +74,9 @@ def calc_path_inductance(path, network_info, cu_stack):
 # =========================================================================
 
 
-def _extract_segments(path, network_info, cu_stack):
+def _extract_segments(
+    path: list[int], network_info: list[dict], cu_stack: dict
+) -> list[dict]:
     """Extract physical geometry from path node sequence."""
     node_to_elem = {}
     for elem in network_info:
@@ -129,7 +137,7 @@ def _extract_segments(path, network_info, cu_stack):
     return segments
 
 
-def _make_plot_frame_class():
+def _make_plot_frame_class() -> type:
     """Create PlotFrame class using wx (imported lazily)."""
     import wx
     from matplotlib.backends.backend_wxagg import FigureCanvasWxAgg as FigureCanvas
@@ -138,7 +146,9 @@ def _make_plot_frame_class():
     class PlotFrame(wx.Frame):
         """wx.Frame wrapper around a matplotlib Figure."""
 
-        def __init__(self, parent, fig, title="Plot"):
+        def __init__(
+            self, parent: wx.Window | None, fig: Any, title: str = "Plot"
+        ) -> None:
             size = fig.get_size_inches() * fig.get_dpi()
             super().__init__(
                 parent,
@@ -158,7 +168,7 @@ def _make_plot_frame_class():
     return PlotFrame
 
 
-def _show_figure(fig, title, parent):
+def _show_figure(fig: Any, title: str, parent: wx.Window | None) -> None:
     """Display a Figure in a PlotFrame via wx.CallAfter (UI-thread safe)."""
     import wx
 
@@ -172,7 +182,9 @@ def _show_figure(fig, title, parent):
     wx.CallAfter(_create)
 
 
-def show_debug_plots(debug_data, segments, parent=None):
+def show_debug_plots(
+    debug_data: dict, segments: list[dict], parent: wx.Window | None = None
+) -> None:
     """Show interactive debug plots for centerline and mesh.
 
     Parameters
@@ -382,7 +394,7 @@ def show_debug_plots(debug_data, segments, parent=None):
 # =========================================================================
 
 
-def _compute_inductance(segments):
+def _compute_inductance(segments: list[dict]) -> dict:
     """Compute inductance from physical trace segments.
 
     1. Build ordered 3D centerline from segments
@@ -502,7 +514,9 @@ def _compute_inductance(segments):
 # =========================================================================
 
 
-def _build_centerline(segments):
+def _build_centerline(
+    segments: list[dict],
+) -> tuple[list[tuple[float, float, float]], list[float]]:
     """Build ordered 3D centerline from path segments.
 
     VIAs produce two points at the same (x,y) with z_from and z_to,
@@ -614,7 +628,7 @@ def _build_centerline(segments):
     return centerline, width_per_seg
 
 
-def _neighbor_width(via_seg, segments, fallback):
+def _neighbor_width(via_seg: dict, segments: list[dict], fallback: float) -> float:
     """Get bridge width for a VIA from its neighboring WIRE segments."""
     idx = segments.index(via_seg)
     widths = []
@@ -637,11 +651,11 @@ def _neighbor_width(via_seg, segments, fallback):
 
 
 def _build_strip_mesh(
-    centerline,
-    width_per_seg,
-    max_faces=_MESH_TARGET_FACES,
-    n_width=4,
-):
+    centerline: list[tuple[float, float, float]],
+    width_per_seg: list[float],
+    max_faces: int = _MESH_TARGET_FACES,
+    n_width: int = 4,
+) -> trimesh.Trimesh:
     """Build a 3D strip mesh from a closed centerline.
 
     The mesh is a quad-strip (split into triangles) that follows the 3D
@@ -770,7 +784,7 @@ def _build_strip_mesh(
     return mesh
 
 
-def _build_stream_function(mesh):
+def _build_stream_function(mesh: trimesh.Trimesh) -> np.ndarray:
     """Stream function psi for a single-hole ring mesh.
 
     psi = 0 on outer boundary, 1 on inner boundary, interpolated for interior.
@@ -802,7 +816,7 @@ def _build_stream_function(mesh):
 # =========================================================================
 
 
-def _format_segments(segments):
+def _format_segments(segments: list[dict]) -> tuple[list[str], str, int]:
     """Format segment info as human-readable lines."""
     lines = []
     total_wire_length = 0.0
@@ -927,7 +941,17 @@ if __name__ == "__main__":
     # ---- Test 2: 3-layer path ----
     # F.Cu (z=0.01mm) -> via -> In1.Cu (z=0.8mm) -> via -> B.Cu (z=1.555mm)
     # Rectangular path: bottom on F.Cu, right on In1.Cu, top+left on B.Cu
-    def wire(s, e, ns, ne, pf, pt, w, layer_name, z):
+    def wire(
+        s: tuple,
+        e: tuple,
+        ns: int,
+        ne: int,
+        pf: int,
+        pt: int,
+        w: float,
+        layer_name: str,
+        z: float,
+    ) -> dict:
         return {
             "type": WIRE,
             "start": s,
@@ -944,7 +968,7 @@ if __name__ == "__main__":
             "thickness": 35e-6,
         }
 
-    def via(pos, z_top, z_bot, l1, l2):
+    def via(pos: tuple, z_top: float, z_bot: float, l1: str, l2: str) -> dict:
         return {
             "type": VIA,
             "position": pos,

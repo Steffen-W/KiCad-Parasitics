@@ -7,7 +7,7 @@ import json
 import math
 import os
 from dataclasses import dataclass, field
-from typing import TypeAlias
+from typing import Any, Callable, TypeAlias
 
 from Get_PCB_Elements_IPC import _arc_geometry, _arc_points, _outline_from_midline
 from pcb_types import WIRE, VIA, PAD, TOP_LAYER, BOTTOM_LAYER
@@ -160,6 +160,7 @@ def make_arc(
 
     midline: list[Pos2D] = [start, end]
     if r_m is not None and center is not None:
+        assert arc_sa is not None
         midline = [start] + _arc_points(center, r_m, arc_sa, angle, width)
 
     item = _base_item(WIRE, layer, ctx)
@@ -256,7 +257,14 @@ class _CoilBuilder:
         self.prev_node = node_start if node_start is not None else self._ctx.new_node()
         self._start_node = self.prev_node
 
-    def add(self, ex: float, ey: float, make_fn=make_wire, node_end=None, **kw):
+    def add(
+        self,
+        ex: float,
+        ey: float,
+        make_fn: Callable[..., Any] = make_wire,
+        node_end: int | None = None,
+        **kw: Any,
+    ) -> None:
         item, _, ne = make_fn(
             self.px,
             self.py,

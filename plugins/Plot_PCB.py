@@ -13,14 +13,14 @@ DATA_FILE = os.path.join(
 LAYER_COLORS = {0: "red", 2: "blue", 4: "green", 6: "orange"}
 
 
-def _color(layers):
+def _color(layers: list[int]) -> str:
     for ly in layers:
         if ly in LAYER_COLORS:
             return LAYER_COLORS[ly]
     return "gray"
 
 
-def _collect_nodes(d, pos_mm):
+def _collect_nodes(d: dict, pos_mm: tuple) -> dict[int, tuple]:
     """Extract node IDs from net_start/net_end and map to positions."""
     nodes = {}
     for layer in d.get("layer", []):
@@ -32,7 +32,7 @@ def _collect_nodes(d, pos_mm):
     return nodes
 
 
-def plot_items(data):
+def plot_items(data: dict) -> None:
     fig, ax = plt.subplots(figsize=(14, 14))
     node_positions = {}
 

@@ -1,11 +1,13 @@
 """Get PCB stackup via kipy IPC API (KiCad 9+)."""
 
+from typing import Any
+
 from kipy.util.board_layer import canonical_name, is_copper_layer
 
 from Get_PCB_Stackup import extract_layer_from_string, Get_PCB_Stackup_fun
 
 
-def Get_PCB_Stackup_IPC(board):
+def Get_PCB_Stackup_IPC(board: Any) -> dict[int, dict]:
     """Get CuStack via kipy IPC API.
 
     Returns the same dict format as Get_PCB_Stackup_fun().
@@ -56,7 +58,7 @@ def Get_PCB_Stackup_IPC(board):
             abs_height += entry["thickness"]
             continue
 
-        def _die(idx):
+        def _die(idx: int) -> dict | None:
             if 0 <= idx < len(flat) and flat[idx]["kind"] == "dielectric":
                 d = flat[idx]
                 return {

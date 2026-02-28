@@ -1,6 +1,7 @@
-import numpy as np
 import logging
+from collections.abc import Iterator
 from ctypes import c_char_p
+import numpy as np
 from .sharedspice import (
     spice,
     captured_output,
@@ -44,7 +45,7 @@ def initialize():
     cmd("set nomoremode")
 
 
-def cmd(command):
+def cmd(command: str) -> list[str]:
     """
     Send a command to the ngspice engine
 
@@ -87,7 +88,7 @@ def cmd(command):
     return captured_output
 
 
-def circ(netlist_lines):
+def circ(netlist_lines: str | list[str]) -> int:
     """
     Load a netlist
 
@@ -174,7 +175,7 @@ def plots():
         ii += 1
 
 
-def vector_names(plot=None):
+def vector_names(plot: str | None = None) -> list[str]:
     """
     Names of vectors present in the specified plot
 
@@ -219,7 +220,7 @@ def vector_names(plot=None):
         ii += 1
 
 
-def vectors(names=None):
+def vectors(names: list[str] | None = None) -> dict[str, np.ndarray]:
     """
     Dictionary with the specified vectors (defaults to all in current plot)
 
@@ -249,7 +250,7 @@ def vectors(names=None):
     return dict(zip(names, map(vector, names)))
 
 
-def vector(name, plot=None):
+def vector(name: str, plot: str | None = None) -> np.ndarray:
     """
     Return a numpy.ndarray with the specified vector
 
@@ -302,7 +303,7 @@ def vector(name, plot=None):
     return array
 
 
-def try_float(s):
+def try_float(s: str) -> float | str:
     """
     Parse `s` as float if possible, otherwise return `s`.
     """
@@ -315,7 +316,9 @@ def try_float(s):
             return s
 
 
-def model_parameters(device=None, model=None):
+def model_parameters(
+    device: str | None = None, model: str | None = None
+) -> dict[str, float | str]:
     """
     Model parameters for device or model
 
@@ -358,7 +361,7 @@ def model_parameters(device=None, model=None):
     return ret
 
 
-def device_state(device):
+def device_state(device: str) -> dict[str, float | str]:
     """
     Dict with device state
 
@@ -390,7 +393,7 @@ def device_state(device):
     return ret
 
 
-def alter_model(model, **params):
+def alter_model(model: str, **params: float) -> None:
     """
     Change parameters of a model card
 
@@ -403,7 +406,7 @@ def alter_model(model, **params):
         cmd("altermod {} {} = {:.6e}".format(model, k, v))
 
 
-def ac(mode, npoints, fstart, fstop):
+def ac(mode: str, npoints: int, fstart: float, fstop: float) -> dict[str, np.ndarray]:
     """
     Small-signal AC analysis
 
@@ -462,11 +465,11 @@ def ac(mode, npoints, fstart, fstop):
     return vectors()
 
 
-def group(iterable, grouplength):
+def group(iterable: list | tuple, grouplength: int) -> Iterator[tuple]:
     return zip(*(iterable[ii::grouplength] for ii in range(grouplength)))
 
 
-def dc(*sweeps):
+def dc(*sweeps: float | str) -> dict[str, np.ndarray]:
     """
     Analyze DC transfer function, return vectors with one axis per sweep
 
@@ -528,7 +531,7 @@ def operating_point():
     return vectors()
 
 
-def save(vector_name):
+def save(vector_name: str) -> None:
     """
     Save this vector in the following analyses
 
@@ -542,7 +545,7 @@ def save(vector_name):
     cmd("save " + vector_name)
 
 
-def destroy(plotname="all"):
+def destroy(plotname: str = "all") -> None:
     """
     Erase plot from memory
 
@@ -554,12 +557,12 @@ def destroy(plotname="all"):
     cmd("destroy " + plotname)
 
 
-def decibel(x):
+def decibel(x: np.ndarray) -> np.ndarray:
     """Calculate 10*log(abs(x))"""
     return 10.0 * np.log10(np.abs(x))
 
 
-def alter(device, **parameters):
+def alter(device: str, **parameters: float | list | tuple) -> None:
     """
     Alter device parameters
 
@@ -582,13 +585,13 @@ def alter(device, **parameters):
         cmd("alter {} {} = {}".format(device.lower(), k, v))
 
 
-def alterparams(**kwargs):
+def alterparams(**kwargs: float) -> None:
     for k, v in kwargs.items():
         cmd("alterparam {} = {}".format(k, v))
     cmd("reset")
 
 
-def linear_sweep(start, stop, step):
+def linear_sweep(start: float, stop: float, step: float) -> np.ndarray:
     """
     Numbers from start to stop (inclusive), separated by step.
 
@@ -618,7 +621,7 @@ def linear_sweep(start, stop, step):
         nextval = nextval + step
 
 
-def source(filename):
+def source(filename: str) -> None:
     """
     Evaluate a ngspice input file
 

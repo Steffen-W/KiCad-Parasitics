@@ -1,7 +1,8 @@
 import logging
-import numpy as np
-import os
 import math
+import os
+import tempfile
+import numpy as np
 
 try:
     from .pcb_types import WIRE, VIA, PAD, ZONE
@@ -37,7 +38,13 @@ except ImportError:
 log = logging.getLogger(__name__)
 
 
-def analyze_trace(length, width, cu_layer_id, CuStack, frequency=100e6):
+def analyze_trace(
+    length: float,
+    width: float,
+    cu_layer_id: int,
+    CuStack: dict,
+    frequency: float = 100e6,
+) -> dict:
     """Analyze a PCB trace with frequency-dependent parameters.
 
     Args:
@@ -155,7 +162,9 @@ def analyze_trace(length, width, cu_layer_id, CuStack, frequency=100e6):
     }
 
 
-def _run_spice(filename, elements, conn1, conn2, ac_freq=None):
+def _run_spice(
+    filename: str, elements: list, conn1: int, conn2: int, ac_freq: float | None = None
+) -> float | complex:
     """Write netlist, run simulation, return impedance.
 
     Args:
@@ -210,12 +219,12 @@ def _run_spice(filename, elements, conn1, conn2, ac_freq=None):
 
 
 def RunSimulation(
-    resistors,
-    conn1,
-    conn2,
-    network_info=None,
-    frequencies=None,
-):
+    resistors: list,
+    conn1: int,
+    conn2: int,
+    network_info: list | None = None,
+    frequencies: list[float] | None = None,
+) -> tuple[float | complex, dict[float, float | complex]]:
     """Run DC simulation and optionally AC simulations at given frequencies.
 
     Returns:
@@ -223,7 +232,8 @@ def RunSimulation(
         z_ac: dict {freq: impedance} for each frequency (empty if no frequencies)
     """
     # https://github.com/ignamv/ngspyce/
-    filename = os.path.join(os.path.dirname(__file__), "TempNetlist.net")
+    _fd, filename = tempfile.mkstemp(suffix=".net", prefix="parasitic_")
+    os.close(_fd)
     gnd = 0
 
     # --- DC: R-only network ---
@@ -289,7 +299,7 @@ def RunSimulation(
     return r_dc, z_ac
 
 
-def Get_shortest_path_RES(path, resistors):
+def Get_shortest_path_RES(path: list[int], resistors: list) -> float:
     res_map = {(min(a, b), max(a, b)): r for a, b, r in resistors}
     return sum(
         res_map[min(path[i - 1], path[i]), max(path[i - 1], path[i])]
@@ -297,7 +307,7 @@ def Get_shortest_path_RES(path, resistors):
     )
 
 
-def extract_network(data, CuStack, netcode=None):
+def extract_network(data: dict, CuStack: dict, netcode: int | None = None) -> dict:
     """Extract electrical network from PCB data (DC resistances only).
 
     # TODO: Split into separate functions for wire, via, and zone resistance
@@ -535,7 +545,7 @@ def extract_network(data, CuStack, netcode=None):
     }
 
 
-def find_path(network, conn1, conn2):
+def find_path(network: dict, conn1: int, conn2: int) -> tuple[float, list[int], float]:
     """Find shortest path between two nodes in the network.
 
     Args:
@@ -570,7 +580,13 @@ def find_path(network, conn1, conn2):
     return distance, path, short_path_res
 
 
-def simulate_network(network, conn1, conn2, CuStack, frequencies=None):
+def simulate_network(
+    network: dict,
+    conn1: int,
+    conn2: int,
+    CuStack: dict,
+    frequencies: list[float] | None = None,
+) -> tuple[float | complex, dict[float, float | complex], list[dict]]:
     """Run DC simulation and optionally AC simulations with HF parameters.
 
     If frequencies are given, computes HF parameters via analyze_trace for each

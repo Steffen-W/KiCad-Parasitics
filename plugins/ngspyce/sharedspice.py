@@ -65,7 +65,7 @@ captured_output = []
 
 
 @CFUNCTYPE(c_int, c_char_p, c_int, c_void_p)
-def printfcn(output, _id, _ret):
+def printfcn(output: bytes, _id: int, _ret: int) -> int:
     """Callback for libngspice to print a message"""
     global captured_output
     prefix, _, content = output.decode("ascii").partition(" ")
@@ -77,7 +77,7 @@ def printfcn(output, _id, _ret):
 
 
 @CFUNCTYPE(c_int, c_char_p, c_int, c_void_p)
-def statfcn(status, _id, _ret):
+def statfcn(status: bytes, _id: int, _ret: int) -> int:
     """
     Callback for libngspice to report simulation status like 'tran 5%'
     """
@@ -87,8 +87,12 @@ def statfcn(status, _id, _ret):
 
 @CFUNCTYPE(c_int, c_int, c_bool, c_bool, c_int, c_void_p)
 def controlled_exit(
-    exit_status, immediate_unloading, requested_exit, libngspice_id, ret
-):
+    exit_status: int,
+    immediate_unloading: bool,
+    requested_exit: bool,
+    libngspice_id: int,
+    ret: int,
+) -> None:
     logger.debug(
         "ControlledExit",
         dict(
@@ -136,7 +140,9 @@ class vecvaluesall(Structure):
 
 
 @CFUNCTYPE(c_int, POINTER(vecvaluesall), c_int, c_int, c_void_p)
-def send_data(vecvaluesall_, num_structs, libngspice_id, ret):
+def send_data(
+    vecvaluesall_: vecvaluesall, num_structs: int, libngspice_id: int, ret: int
+) -> None:
     logger.debug(
         "SendData",
         dict(
