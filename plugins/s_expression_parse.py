@@ -1,6 +1,7 @@
+import logging
 import re
 
-dbg = False
+log = logging.getLogger(__name__)
 
 term_regex = r"""(?mx)
     \s*(?:
@@ -12,20 +13,18 @@ term_regex = r"""(?mx)
        )"""
 
 
-def parse_sexp(sexp):
-    stack = []
-    out = []
-    if dbg:
-        print("%-6s %-14s %-44s %-s" % tuple("term value out stack".split()))
+def parse_sexp(sexp: str) -> list:
+    stack: list = []
+    out: list = []
     for termtypes in re.finditer(term_regex, sexp):
         term, value = [(t, v) for t, v in termtypes.groupdict().items() if v][0]
-        if dbg:
-            print("%-7s %-14s %-44r %-r" % (term, value, out, stack))
+        log.debug("%-7s %-14s %-44r %-r", term, value, out, stack)
         if term == "brackl":
             stack.append(out)
             out = []
         elif term == "brackr":
-            assert stack, "Trouble with nesting of brackets"
+            if not stack:
+                raise ValueError("Unmatched closing bracket in S-expression")
             tmpout, out = out, stack.pop(-1)
             out.append(tmpout)
         elif term == "num":
@@ -39,11 +38,12 @@ def parse_sexp(sexp):
             out.append(value)
         else:
             raise NotImplementedError(f"Error: {term!r}, {value!r}")
-    assert not stack, "Trouble with nesting of brackets"
+    if stack:
+        raise ValueError("Unclosed bracket in S-expression")
     return out[0]
 
 
-def print_sexp(exp):
+def print_sexp(exp: list | str | int | float) -> str:
     out = ""
     if isinstance(exp, list):
         out += "(" + " ".join(print_sexp(x) for x in exp) + ")"

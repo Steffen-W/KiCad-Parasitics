@@ -4,6 +4,7 @@ import os
 import math
 
 try:
+    from .pcb_types import WIRE, VIA, PAD, ZONE
     from .Get_Distance import (
         find_shortest_path,
         get_graph_from_edges,
@@ -31,6 +32,7 @@ except ImportError:
         analyze_coplanar,
     )
     import ngspyce
+    from pcb_types import WIRE, VIA, PAD, ZONE
 
 log = logging.getLogger(__name__)
 
@@ -237,7 +239,7 @@ def RunSimulation(
             n1, n2 = elem["nodes"]
             idx += 1
 
-            if elem["type"] == "WIRE":
+            if elem["type"] == WIRE:
                 hf = elem.get("hf", {}).get(freq)
                 R = hf["r_ac"] if hf else elem["resistance"]
                 L = hf.get("inductance") if hf else None
@@ -264,7 +266,7 @@ def RunSimulation(
                     # R-only (no HF data)
                     ac.append(("R", n1, n2, R))
 
-            elif elem["type"] == "VIA":
+            elif elem["type"] == VIA:
                 R = elem["resistance"]
                 L = elem.get("inductance")
                 C = elem.get("capacitance")
@@ -288,19 +290,18 @@ def RunSimulation(
 
 
 def Get_shortest_path_RES(path, resistors):
-    def get_res(x1, x2):
-        x = next(x for x in resistors if {x1, x2} == set(x[0:2]))
-        return x[2]
-
-    RES = 0
-    for i in range(1, len(path)):
-        RES += get_res(path[i - 1], path[i])
-
-    return RES
+    res_map = {(min(a, b), max(a, b)): r for a, b, r in resistors}
+    return sum(
+        res_map[min(path[i - 1], path[i]), max(path[i - 1], path[i])]
+        for i in range(1, len(path))
+    )
 
 
 def extract_network(data, CuStack, netcode=None):
     """Extract electrical network from PCB data (DC resistances only).
+
+    # TODO: Split into separate functions for wire, via, and zone resistance
+    # calculation; function is currently ~230 lines.
 
     Args:
         data: PCB element data dictionary
@@ -368,7 +369,7 @@ def extract_network(data, CuStack, netcode=None):
                         resistors.append([node1, node2, via["resistance"], distance])
                         network_info.append(
                             {
-                                "type": "VIA",
+                                "type": VIA,
                                 "nodes": (node1, node2),
                                 "resistance": via["resistance"],
                                 "inductance": via["inductance"],
@@ -391,7 +392,7 @@ def extract_network(data, CuStack, netcode=None):
                 log.warning("Layer %s not in CuStack, skipping element", Layer)
                 continue
 
-            if d["type"] == "WIRE":
+            if d["type"] == WIRE:
                 netStart = d["net_start"].get(Layer, 0)
                 netEnd = d["net_end"].get(Layer, 0)
 
@@ -408,10 +409,15 @@ def extract_network(data, CuStack, netcode=None):
                 trace = analyze_trace(
                     d["length"], d["width"], Layer, CuStack, frequency=0
                 )
+                if trace["r_dc"] <= 0:
+                    raise ValueError(
+                        f"Invalid resistance for WIRE (layer={Layer}, "
+                        f"length={d['length']}, width={d['width']}): r_dc={trace['r_dc']}"
+                    )
                 resistors.append([netStart, netEnd, trace["r_dc"], d["length"]])
 
                 info = {
-                    "type": "WIRE",
+                    "type": WIRE,
                     "nodes": (netStart, netEnd),
                     "resistance": trace["r_dc"],
                     "length": d["length"],
@@ -437,7 +443,7 @@ def extract_network(data, CuStack, netcode=None):
                     CuStack[Layer]["abs_height"],
                 )
 
-            elif d["type"] == "PAD":
+            elif d["type"] == PAD:
                 # Single-layer pad - just record its position
                 if Layer in d.get("net_start", {}):
                     node = d["net_start"][Layer]
@@ -453,7 +459,7 @@ def extract_network(data, CuStack, netcode=None):
     # Handle ZONES: connect all elements touching the same zone
     zone_connections = {}
     for uuid, d in data.items():
-        if (netcode is not None and d["net_code"] != netcode) or d["type"] != "ZONE":
+        if (netcode is not None and d["net_code"] != netcode) or d["type"] != ZONE:
             continue
 
         zone_conns = d.get("conn_start", [])
@@ -470,7 +476,7 @@ def extract_network(data, CuStack, netcode=None):
                 if layer not in conn_item.get("layer", []):
                     continue
 
-                if conn_item.get("type") == "WIRE":
+                if conn_item.get("type") == WIRE:
                     # Only add the wire end that touches the zone
                     for conn_type in ["conn_start", "conn_end"]:
                         net_type = (
@@ -507,7 +513,7 @@ def extract_network(data, CuStack, netcode=None):
                     resistors.append([node1, node2, zone_resistance, zone_distance])
                     network_info.append(
                         {
-                            "type": "ZONE",
+                            "type": ZONE,
                             "nodes": (node1, node2),
                             "resistance": zone_resistance,
                             "length": zone_distance,
@@ -515,10 +521,6 @@ def extract_network(data, CuStack, netcode=None):
                             "layer_name": layer_name,
                         }
                     )
-
-    for res in resistors:
-        if res[2] <= 0:
-            raise ValueError("Error in resistance calculation!")
 
     # Build graph
     edges = [(i[0], i[1], i[3]) for i in resistors]
@@ -590,7 +592,7 @@ def simulate_network(network, conn1, conn2, CuStack, frequencies=None):
 
     # Compute HF parameters for WIRE elements
     for elem in network_info:
-        if elem["type"] != "WIRE":
+        if elem["type"] != WIRE:
             continue
         hf = {}
         for f in frequencies or []:

@@ -78,22 +78,11 @@ def find_shortest_path(graph, start_node, end_node):
     return distance[end_node], path[::-1]
 
 
-def get_graph_from_edges(edges: list):
-    res = {}
-    nodes = []
-    for e in edges:
-        res[(e[0], e[1])] = e[2]
-        res[(e[1], e[0])] = e[2]
-        nodes.append(e[0])
-        nodes.append(e[1])
-    nodes = sorted(set(nodes))
-
-    edges = [(k[0], k[1], res[k]) for k in res.keys()]
-
-    # Converting to a graph representation
-    graph: dict[int, dict[int, float]] = {node: {} for node in nodes}
-    for edge in edges:
-        graph[edge[0]][edge[1]] = edge[2]
+def get_graph_from_edges(edges: list) -> dict[int, dict[int, float]]:
+    graph: dict[int, dict[int, float]] = {}
+    for n1, n2, weight in edges:
+        graph.setdefault(n1, {})[n2] = weight
+        graph.setdefault(n2, {})[n1] = weight
     return graph
 
 

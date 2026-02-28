@@ -1,4 +1,10 @@
 from collections import defaultdict
+from typing import Any
+
+try:
+    from .pcb_types import WIRE, ZONE
+except ImportError:
+    from pcb_types import WIRE, ZONE
 
 # Network assignment states
 # Valid net IDs are > 0, so 0 means "not yet assigned"
@@ -6,7 +12,7 @@ NOT_ASSIGNED = 0
 ERROR = -1
 
 
-def Connect_Nets(data):
+def Connect_Nets(data: dict[Any, dict[str, Any]]) -> dict[Any, dict[str, Any]]:
     """
     This function connects networks in a KiCad-like data format.
     """
@@ -17,7 +23,7 @@ def Connect_Nets(data):
         data[uuid].setdefault("net_start", defaultdict(lambda: NOT_ASSIGNED))
         data[uuid].setdefault("net_end", defaultdict(lambda: NOT_ASSIGNED))
 
-    def getNet(conn, uuid, layer, pos: tuple = (0, 0)):
+    def getNet(conn: Any, uuid: Any, layer: int, pos: tuple = (0, 0)) -> int:
         """
         Retrieves the network ID from a connected element.
 
@@ -39,10 +45,10 @@ def Connect_Nets(data):
 
         conn_data = data[conn]
 
-        if conn_data["type"] == "ZONE":  # handled in Get_Parasitic
+        if conn_data["type"] == ZONE:  # handled in Get_Parasitic
             return NOT_ASSIGNED
 
-        if conn_data["type"] == "WIRE":
+        if conn_data["type"] == WIRE:
             # For wires: check which end connects to us based on connection list
             if uuid in conn_data.get("conn_start", []):
                 return conn_data["net_start"].get(layer, NOT_ASSIGNED)
@@ -59,7 +65,9 @@ def Connect_Nets(data):
             # For vias/pads: use netStart (they have single connection point per layer)
             return conn_data["net_start"].get(layer, NOT_ASSIGNED)
 
-    def setNet(conn, uuid, layer, newNet, pos: tuple = (0, 0)):
+    def setNet(
+        conn: Any, uuid: Any, layer: int, newNet: int, pos: tuple = (0, 0)
+    ) -> None:
         """
         Sets the network ID on a connected element.
 
@@ -77,10 +85,10 @@ def Connect_Nets(data):
 
         conn_data = data[conn]
 
-        if conn_data["type"] == "ZONE":  # handled in Get_Parasitic
+        if conn_data["type"] == ZONE:  # handled in Get_Parasitic
             return
 
-        if conn_data["type"] == "WIRE":
+        if conn_data["type"] == WIRE:
             # For wires: set the appropriate end based on connection list
             if uuid in conn_data.get("conn_start", []):
                 conn_data["net_start"][layer] = newNet
@@ -99,15 +107,17 @@ def Connect_Nets(data):
     # Connecting networks
     nodeCounter = 0
 
-    # Multiple passes to handle dependency ordering
-    # This ensures proper network propagation even when processing order matters
-    max_passes = 10
-    for pass_num in range(max_passes):
+    # Multiple passes to handle dependency ordering.
+    # In the worst case a linear chain of N elements needs N passes;
+    # real PCB nets are never deeper than a few dozen elements, so 10 passes
+    # is a safe upper bound while avoiding an infinite loop on corrupt data.
+    _MAX_PASSES = 10
+    for _ in range(_MAX_PASSES):
         changed = False
 
         # Process netStart connections
         for uuid, d in data.items():
-            if d.get("type") == "ZONE":  # handled in Get_Parasitic
+            if d.get("type") == ZONE:  # handled in Get_Parasitic
                 continue
 
             for layer in d["layer"]:
@@ -157,7 +167,7 @@ def Connect_Nets(data):
 
                 # If no network from connections, try to use netStart (but NOT for wires)
                 # Wires need separate nodes for each end to calculate resistance
-                if tempNet == NOT_ASSIGNED and d.get("type") != "WIRE":
+                if tempNet == NOT_ASSIGNED and d.get("type") != WIRE:
                     tempNet = d["net_start"].get(layer, NOT_ASSIGNED)
 
                 # If still no network, create a new one

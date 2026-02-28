@@ -2,6 +2,11 @@
 
 from collections import deque
 
+try:
+    from .pcb_types import WIRE, VIA, ZONE
+except ImportError:
+    from pcb_types import WIRE, VIA, ZONE
+
 
 def simplify_graph(graph, start, end):
     """Simplify graph by removing dead-ends and compressing chains.
@@ -248,6 +253,8 @@ def render_network_ascii(graph, path, network_info):
             node = node[step]
         node["_leaf"] = True
 
+    merge_node = mids[0][-1]  # the node where all parallel paths rejoin
+
     def chain_res(parent, chain):
         """Resistance of a chain of nodes starting from parent."""
         full = [parent]
@@ -297,7 +304,6 @@ def render_network_ascii(graph, path, network_info):
             if any(k != "_leaf" for k in sub):
                 render_trie(sub, chain[-1], prefix_str + cont_line)
 
-    merge_node = mids[0][-1]  # the node where all parallel paths rejoin
     render_trie(trie, mids[0][0], " ")
 
     # Parallel resistance (total per path)
@@ -339,17 +345,17 @@ def format_network_info(network_info, graph=None, path=None):
         t = item["type"]
         r = item["resistance"]
 
-        if t == "WIRE":
+        if t == WIRE:
             lines.append(
                 f"WIRE  n{n1}--n{n2}  R={r * 1000:.3f}mΩ  "
                 f"L={item['length'] * 1000:.3f}mm W={item['width'] * 1000:.3f}mm {item['layer_name']}"
             )
-        elif t == "VIA":
+        elif t == VIA:
             lines.append(
                 f"VIA   n{n1}--n{n2}  R={r * 1000:.3f}mΩ  "
                 f"D={item['drill'] * 1000:.2f}mm {item['layer1_name']}<->{item['layer2_name']}"
             )
-        elif t == "ZONE":
+        elif t == ZONE:
             lines.append(
                 f"ZONE  n{n1}--n{n2}  R={r * 1000:.3f}mΩ  {item['layer_name']}"
             )
@@ -371,7 +377,7 @@ if __name__ == "__main__":
     #   1→2→3→4→5→6   dead-end 3→7→8   parallel 2→9→5
     def _w(n1, n2, r):
         return {
-            "type": "WIRE",
+            "type": WIRE,
             "nodes": (n1, n2),
             "resistance": r,
             "length": 0.005,

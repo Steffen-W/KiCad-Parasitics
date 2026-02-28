@@ -4,6 +4,7 @@ import json
 import os
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle, Polygon
+from pcb_types import WIRE, VIA, PAD, ZONE
 
 DATA_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "debug_ItemList.json"
@@ -40,7 +41,7 @@ def plot_items(data):
         color = _color(d.get("layer", []))
         outline = d.get("_outline")
 
-        if typ == "WIRE":
+        if typ == WIRE:
             w = d.get("width", 0)
             r = w / 2 * 1e3
 
@@ -71,7 +72,7 @@ def plot_items(data):
 
             node_positions.update(_collect_nodes(d, ((sx, sy), (ex, ey))))
 
-        elif typ == "VIA":
+        elif typ == VIA:
             px, py = d["position"][0] * 1e3, d["position"][1] * 1e3
             r = d.get("drill", 0.0003) / 2 * 1e3
             ax.add_patch(
@@ -84,7 +85,7 @@ def plot_items(data):
                 if n and n > 0:
                     node_positions[n] = (px, py)
 
-        elif typ == "PAD":
+        elif typ == PAD:
             px, py = d["position"][0] * 1e3, d["position"][1] * 1e3
 
             if outline and len(outline) >= 3:
@@ -127,7 +128,7 @@ def plot_items(data):
                 if n and n > 0:
                     node_positions[n] = (px, py)
 
-        elif typ == "ZONE":
+        elif typ == ZONE:
             if outline and len(outline) >= 3:
                 pts = [(p[0] * 1e3, p[1] * 1e3) for p in outline]
                 ax.add_patch(
@@ -162,6 +163,11 @@ def plot_items(data):
 
 
 if __name__ == "__main__":
+    if not os.path.exists(DATA_FILE):
+        raise FileNotFoundError(
+            f"debug_ItemList.json not found at {DATA_FILE}\n"
+            "Run the plugin once to generate it, or set PARASITIC_DEBUG=1."
+        )
     with open(DATA_FILE) as f:
         data = json.load(f)
     data = {k: v for k, v in data.items() if isinstance(v, dict) and "type" in v}

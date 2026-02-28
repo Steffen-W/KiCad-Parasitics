@@ -270,7 +270,10 @@ def _microstrip_er_dispersion(u: float, epsilon_r: float, f_n: float) -> float:
     Returns:
         dispersion factor P
     Reference:
-        Kirschning & Jansen (1982)
+        Kirschning & Jansen, "Accurate Model for Effective Dielectric Constant
+        of Microstrip with Validity up to Millimetre-Wave Frequencies",
+        Electronics Letters, Vol. 18, No. 6, 1982.
+        (QUCS technical docs, eq. 11.17–11.21)
     """
     P1 = (
         0.27488
@@ -295,10 +298,14 @@ def _microstrip_Z0_dispersion(
         er_eff_f: frequency-dependent effective permittivity
         f_n: normalized frequency [GHz * mm]
     Returns:
-        dispersion factor D (Z0_f = Z0_0 * D)
+        dispersion factor D, so that Z0(f) = Z0(0) * (R13/R14)^R17
     Reference:
-        Kirschning & Jansen (1982)
+        Jansen & Kirschning, "Arguments and an Accurate Model for the
+        Power-Current Formulation of Microstrip Characteristic Impedance",
+        AEÜ, Vol. 37, No. 3/4, 1983.
+        (QUCS technical docs, eq. 11.33–11.50)
     """
+    # R1–R17: intermediate terms per QUCS eq. (11.33)–(11.49)
     R1 = 0.03891 * pow(epsilon_r, 1.4)
     R2 = 0.267 * pow(u, 7.0)
     R3 = 4.766 * exp(-3.228 * pow(u, 0.641))

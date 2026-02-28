@@ -20,6 +20,11 @@ from scipy.spatial import cKDTree
 from bfieldtools.mesh_impedance import self_inductance_matrix
 from bfieldtools.utils import find_mesh_boundaries
 
+try:
+    from .pcb_types import WIRE, VIA
+except ImportError:
+    from pcb_types import WIRE, VIA
+
 log = logging.getLogger(__name__)
 
 _MESH_TARGET_FACES = 2000
@@ -80,13 +85,13 @@ def _extract_segments(path, network_info, cu_stack):
             log.warning("No element for nodes %s-%s", node_a, node_b)
             continue
 
-        if elem["type"] == "WIRE":
+        if elem["type"] == WIRE:
             layer_id = elem["layer"]
             z = cu_stack[layer_id]["abs_height"] if layer_id in cu_stack else 0.0
             # Store which node is at which end for direction tracking
             node_start, node_end = elem["nodes"]
             seg = {
-                "type": "WIRE",
+                "type": WIRE,
                 "start": elem["start"],
                 "end": elem["end"],
                 "node_at_start": node_start,
@@ -105,12 +110,12 @@ def _extract_segments(path, network_info, cu_stack):
                     seg[key] = elem[key]
             segments.append(seg)
 
-        elif elem["type"] == "VIA":
+        elif elem["type"] == VIA:
             z1 = cu_stack.get(elem["layer1"], {}).get("abs_height", 0.0)
             z2 = cu_stack.get(elem["layer2"], {}).get("abs_height", 0.0)
             segments.append(
                 {
-                    "type": "VIA",
+                    "type": VIA,
                     "position": elem["position"],
                     "drill": elem["drill"],
                     "length": elem["length"],
@@ -199,7 +204,7 @@ def show_debug_plots(debug_data, segments, parent=None):
     ax1 = fig1.add_subplot(111)
     drawn_layers = set()
     for seg in segments:
-        if seg["type"] == "VIA":
+        if seg["type"] == VIA:
             px, py = seg["position"]
             ax1.plot(
                 px * 1e3,
@@ -212,7 +217,7 @@ def show_debug_plots(debug_data, segments, parent=None):
             )
             drawn_layers.add("VIA")
             continue
-        if seg["type"] != "WIRE":
+        if seg["type"] != WIRE:
             continue
         layer_name = seg.get("layer_name", "?")
         color = layer_colors.get(layer_name, "gray")
@@ -515,12 +520,12 @@ def _build_centerline(segments):
 
     # Pre-scan: find the first wire width as fallback
     for seg in segments:
-        if seg["type"] == "WIRE" and seg.get("width", 0.0) > 0:
+        if seg["type"] == WIRE and seg.get("width", 0.0) > 0:
             last_width = seg["width"]
             break
 
     for seg in segments:
-        if seg["type"] == "VIA":
+        if seg["type"] == VIA:
             pos = tuple(seg["position"])
             via_width = _neighbor_width(seg, segments, last_width)
 
@@ -552,7 +557,7 @@ def _build_centerline(segments):
             current_z = z_to
             continue
 
-        if seg["type"] != "WIRE":
+        if seg["type"] != WIRE:
             continue
 
         w = seg.get("width", 0.0)
@@ -614,12 +619,12 @@ def _neighbor_width(via_seg, segments, fallback):
     idx = segments.index(via_seg)
     widths = []
     # Look at previous segment
-    if idx > 0 and segments[idx - 1]["type"] == "WIRE":
+    if idx > 0 and segments[idx - 1]["type"] == WIRE:
         w = segments[idx - 1].get("width", 0.0)
         if w > 0:
             widths.append(w)
     # Look at next segment
-    if idx < len(segments) - 1 and segments[idx + 1]["type"] == "WIRE":
+    if idx < len(segments) - 1 and segments[idx + 1]["type"] == WIRE:
         w = segments[idx + 1].get("width", 0.0)
         if w > 0:
             widths.append(w)
@@ -804,7 +809,7 @@ def _format_segments(segments):
     layers_used = set()
 
     for seg in segments:
-        if seg["type"] == "WIRE":
+        if seg["type"] == WIRE:
             sx, sy = seg["start"]
             ex, ey = seg["end"]
             l_mm = seg.get("length", 0) * 1e3
@@ -814,7 +819,7 @@ def _format_segments(segments):
             )
             total_wire_length += seg.get("length", 0)
             layers_used.add(seg["layer_name"])
-        elif seg["type"] == "VIA":
+        elif seg["type"] == VIA:
             px, py = seg["position"]
             lines.append(
                 f"  VIA   ({px * 1e3:.1f},{py * 1e3:.1f})  "
@@ -841,7 +846,7 @@ if __name__ == "__main__":
     # Path: (125,23) B.Cu -> (125,20) B.Cu -> (130,20) B.Cu -> VIA -> (130,25) F.Cu -> (125,25) F.Cu
     test_segments = [
         {
-            "type": "WIRE",
+            "type": WIRE,
             "start": (0.125, 0.020),
             "end": (0.125, 0.023),
             "node_at_start": 1,
@@ -856,7 +861,7 @@ if __name__ == "__main__":
             "thickness": 35e-6,
         },
         {
-            "type": "WIRE",
+            "type": WIRE,
             "start": (0.130, 0.020),
             "end": (0.125, 0.020),
             "node_at_start": 3,
@@ -871,7 +876,7 @@ if __name__ == "__main__":
             "thickness": 35e-6,
         },
         {
-            "type": "VIA",
+            "type": VIA,
             "position": (0.130, 0.020),
             "drill": 0.0003,
             "length": 0.001545,
@@ -881,7 +886,7 @@ if __name__ == "__main__":
             "layer2_name": "B.Cu",
         },
         {
-            "type": "WIRE",
+            "type": WIRE,
             "start": (0.130, 0.020),
             "end": (0.130, 0.025),
             "node_at_start": 4,
@@ -896,7 +901,7 @@ if __name__ == "__main__":
             "thickness": 35e-6,
         },
         {
-            "type": "WIRE",
+            "type": WIRE,
             "start": (0.130, 0.025),
             "end": (0.125, 0.025),
             "node_at_start": 5,
@@ -924,7 +929,7 @@ if __name__ == "__main__":
     # Rectangular path: bottom on F.Cu, right on In1.Cu, top+left on B.Cu
     def wire(s, e, ns, ne, pf, pt, w, layer_name, z):
         return {
-            "type": "WIRE",
+            "type": WIRE,
             "start": s,
             "end": e,
             "node_at_start": ns,
@@ -941,7 +946,7 @@ if __name__ == "__main__":
 
     def via(pos, z_top, z_bot, l1, l2):
         return {
-            "type": "VIA",
+            "type": VIA,
             "position": pos,
             "drill": 0.0003,
             "length": abs(z_top - z_bot),

@@ -1,5 +1,6 @@
 import os
 import os.path
+import re
 import sys
 import warnings
 import traceback
@@ -221,6 +222,19 @@ def format_result_message(result, CuStack, net_tie_info=None):
     return "\n".join(lines)
 
 
+_SI_PREFIXES = [
+    (1e12, "T"),
+    (1e9, "G"),
+    (1e6, "M"),
+    (1e3, "k"),
+    (1, " "),
+    (1e-3, "m"),
+    (1e-6, "µ"),
+    (1e-9, "n"),
+    (1e-12, "p"),
+]
+
+
 def format_si(value, unit, precision=3):
     """Format value with SI prefix (µ, m, k, M, G, etc.).
 
@@ -232,20 +246,8 @@ def format_si(value, unit, precision=3):
     Returns:
         Formatted string like "1.234 mΩ" or "56.789 kHz"
     """
-    si_prefixes = [
-        (1e12, "T"),
-        (1e9, "G"),
-        (1e6, "M"),
-        (1e3, "k"),
-        (1, " "),
-        (1e-3, "m"),
-        (1e-6, "µ"),
-        (1e-9, "n"),
-        (1e-12, "p"),
-    ]
-
     abs_val = abs(value) if value != 0 else 0
-    for scale, prefix in si_prefixes:
+    for scale, prefix in _SI_PREFIXES:
         if abs_val >= scale * 0.9999:  # small tolerance for floating point
             scaled = value / scale
             return f"{scaled:.{precision}f} {prefix}{unit}"
@@ -457,8 +459,6 @@ def run_plugin(ItemList, CuStack):
                         ]
                         txt = json.dumps(cleaned, indent=1)
                         # Collapse short arrays (coordinates etc.) onto single lines
-                        import re
-
                         txt = re.sub(
                             r"\[\s+(-?[\d.e+\-]+),\s+(-?[\d.e+\-]+)\s+\]",
                             r"[\1, \2]",

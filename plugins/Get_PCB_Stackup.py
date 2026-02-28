@@ -53,20 +53,13 @@ def search_recursive(line: list, entry: str, all=False):
 def Get_PCB_Stackup_fun(
     ProjectPath: str | Path = "./test.kicad_pcb", new_v9=True, board_thickness=None
 ):
-    def readFile2var(path):
-        if not exists(path):
-            return None
-
-        with open(path, "r") as file:
-            data = file.read()
-        return data
-
     layers = []
     CuStack = {}
     parsed = None
     try:
         if exists(ProjectPath):
-            txt = readFile2var(ProjectPath)
+            with open(ProjectPath, "r") as f:
+                txt = f.read()
             parsed = parse_sexp(txt)
 
             while True:

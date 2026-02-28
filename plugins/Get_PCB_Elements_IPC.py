@@ -12,6 +12,7 @@ from kipy.board_types import ArcTrack, FootprintInstance
 from kipy.util.board_layer import canonical_name, is_copper_layer
 
 from Get_PCB_Stackup import extract_layer_from_string
+from pcb_types import WIRE, VIA, PAD, ZONE
 
 log = logging.getLogger(__name__)
 
@@ -255,7 +256,7 @@ def _collect_footprint_shapes(fp, enabled_layers):
             wr = width / 2
             nx, ny = -dy / length * wr, dx / length * wr
             items[oid] = {
-                "type": "WIRE",
+                "type": WIRE,
                 "id": oid,
                 "start": start,
                 "end": end,
@@ -284,7 +285,7 @@ def _collect_footprint_shapes(fp, enabled_layers):
             if arc_length == 0:
                 continue
             item = {
-                "type": "WIRE",
+                "type": WIRE,
                 "id": oid,
                 "start": start,
                 "end": end,
@@ -373,7 +374,7 @@ def Get_PCB_Elements_IPC(board: Board):
             continue
 
         temp = {
-            "type": "WIRE",
+            "type": WIRE,
             "id": oid,
             "start": start,
             "end": end,
@@ -433,7 +434,7 @@ def Get_PCB_Elements_IPC(board: Board):
         layers = _cu_layers(via.padstack.layers, enabled_layers)
 
         ItemList[oid] = {
-            "type": "VIA",
+            "type": VIA,
             "id": oid,
             "position": _pos_m(via.position),
             "width": _to_m(via.diameter),
@@ -477,7 +478,7 @@ def Get_PCB_Elements_IPC(board: Board):
         ]
 
         ItemList[oid] = {
-            "type": "PAD",
+            "type": PAD,
             "id": oid,
             "position": (cx, cy),
             "size": size,
@@ -537,7 +538,7 @@ def Get_PCB_Elements_IPC(board: Board):
         num_corners = len(outline_pts)
 
         ItemList[oid] = {
-            "type": "ZONE",
+            "type": ZONE,
             "id": oid,
             "position": center,
             "layer": layers,
@@ -773,6 +774,9 @@ def _point_in_pad(point, pad_data, margin=0):
 def _build_connectivity(ItemList):
     """Build conn_start/conn_end by matching coordinates.
 
+    # TODO: Split into named sub-steps with guard clauses; function currently
+    # implements 3 separate algorithms inline and is ~210 lines deep.
+
     Uses bounding boxes for fast pre-filtering, then:
     - Point-to-point: distance <= r_i + r_j (sum of radii)
     - Point-in-pad: shape-aware test (circle/rect/oval)
@@ -786,25 +790,25 @@ def _build_connectivity(ItemList):
         layer_sets[oid] = set(d.get("layer", []))
 
     # Categorize elements
-    wires = {oid: d for oid, d in ItemList.items() if d["type"] == "WIRE"}
-    pads = {oid: d for oid, d in ItemList.items() if d["type"] == "PAD"}
+    wires = {oid: d for oid, d in ItemList.items() if d["type"] == WIRE}
+    pads = {oid: d for oid, d in ItemList.items() if d["type"] == PAD}
     zones = {
         oid: d
         for oid, d in ItemList.items()
-        if d["type"] == "ZONE" and len(d.get("_outline", [])) >= 3
+        if d["type"] == ZONE and len(d.get("_outline", [])) >= 3
     }
 
     # Collect connection points: (position, oid, endpoint_type, radius)
     points = []
     for oid, d in ItemList.items():
-        if d["type"] == "WIRE":
+        if d["type"] == WIRE:
             r = d.get("width", 0) / 2
             points.append((d["start"], oid, "start", r))
             points.append((d["end"], oid, "end", r))
-        elif d["type"] == "VIA":
+        elif d["type"] == VIA:
             r = d.get("width", d.get("drill", 0)) / 2
             points.append((d["position"], oid, "position", r))
-        elif d["type"] == "PAD":
+        elif d["type"] == PAD:
             sx, sy = d.get("size", (0, 0))
             r = min(sx, sy) / 2 if sx and sy else d.get("drill", 0) / 2
             points.append((d["position"], oid, "position", r))
