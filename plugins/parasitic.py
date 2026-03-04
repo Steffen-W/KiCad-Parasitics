@@ -36,6 +36,9 @@ except ImportError:
 
 log = logging.getLogger(__name__)
 
+# far-end termination for single-ended Zin measurement
+_ZIN_TERMINATION_OHM: float = 50.0
+
 
 def _build_path_error(
     element1: dict[str, Any],
@@ -179,20 +182,41 @@ def analyze_pcb_parasitic(
     log.debug("simulate_network start")
 
     # Simulate with HF parameters
-    Resistance, Z_ac, network_info = simulate_network(
+    Resistance, Z_ac, Z_ac_conn1, Z_ac_conn2, network_info = simulate_network(
         network,
         conn1,
         conn2,
         CuStack,
         frequencies=frequencies,
+        rload_far=_ZIN_TERMINATION_OHM,
     )
 
     log.debug("simulate_network done")
+
+    for freq, z in sorted(Z_ac_conn1.items()):
+        log.debug(
+            "[Zin conn1] %.0f Hz: |Z|=%.3f mΩ (%.3f + j%.3f mΩ)",
+            freq,
+            abs(z) * 1000,
+            z.real * 1000,
+            z.imag * 1000,
+        )
+    for freq, z in sorted(Z_ac_conn2.items()):
+        log.debug(
+            "[Zin conn2] %.0f Hz: |Z|=%.3f mΩ (%.3f + j%.3f mΩ)",
+            freq,
+            abs(z) * 1000,
+            z.real * 1000,
+            z.imag * 1000,
+        )
 
     result.update(
         {
             "resistance_dc": Resistance,
             "impedance_ac": Z_ac,
+            "impedance_ac_conn1": Z_ac_conn1,
+            "impedance_ac_conn2": Z_ac_conn2,
+            "zin_termination_ohm": _ZIN_TERMINATION_OHM,
             "distance": Distance,
             "short_path_resistance": short_path_RES,
             "area": network["area"],
@@ -228,6 +252,8 @@ def format_result_message(
     short_path_RES = result["short_path_resistance"]
     Resistance = result["resistance_dc"]
     Z_ac = result["impedance_ac"]
+    Z_ac_conn1 = result.get("impedance_ac_conn1", {})
+    Z_ac_conn2 = result.get("impedance_ac_conn2", {})
     Area = result["area"]
 
     lines.append(f"Shortest distance ≈ {Distance * 1000:.3f} mm")
@@ -247,29 +273,49 @@ def format_result_message(
         Resistance is not None and not math.isinf(Resistance) and Resistance >= 0
     )
     has_ac = bool(Z_ac)
+    has_zin = bool(Z_ac_conn1) or bool(Z_ac_conn2)
+    termination: float | None = result.get("zin_termination_ohm")
+    term_str = format_si(termination, "Ω") if termination is not None else "?"
 
     if has_valid_dc or has_ac:
         lines.append("")
-        lines.append(f"{'Freq':^8}  {'|Z|':^12}  {'Re':^12}  {'Im':^12}")
-        lines.append("─" * (8 + 2 + 12 + 2 + 12 + 2 + 12))
+        if has_zin:
+            zin1_hdr = f"|Zin1/{term_str}|"
+            zin2_hdr = f"|Zin2/{term_str}|"
+            lines.append(
+                f"{'Freq':^8}  {'|Z|':^12}  {'Re':^12}  {'Im':^12}  {zin1_hdr:^14}  {zin2_hdr:^14}"
+            )
+            lines.append("─" * (8 + 2 + 12 + 2 + 12 + 2 + 12 + 2 + 14 + 2 + 14))
+        else:
+            lines.append(f"{'Freq':^8}  {'|Z|':^12}  {'Re':^12}  {'Im':^12}")
+            lines.append("─" * (8 + 2 + 12 + 2 + 12 + 2 + 12))
 
         if has_valid_dc:
             dc_str = format_si(Resistance, "Ω")
-            lines.append(f"{'DC':>8}  {dc_str:>12}  {dc_str:>12}  {'-':>12}")
+            zin_suffix = f"  {term_str:>14}  {term_str:>14}" if has_zin else ""
+            lines.append(
+                f"{'DC':>8}  {dc_str:>12}  {dc_str:>12}  {'-':>12}{zin_suffix}"
+            )
         elif Resistance is not None and Resistance < 0:
             lines.append("DC         [ngspice error]")
 
         for freq, z in sorted(Z_ac.items()):
-            f = format_si(freq, "Hz", precision=0)
+            f_str = format_si(freq, "Hz", precision=0)
             if isinstance(z, complex):
-                lines.append(
-                    f"{f:>8}  {format_si(abs(z), 'Ω'):>12}  {format_si(z.real, 'Ω'):>12}  {format_si(z.imag, 'Ω'):>12}"
-                )
+                row = f"{f_str:>8}  {format_si(abs(z), 'Ω'):>12}  {format_si(z.real, 'Ω'):>12}  {format_si(z.imag, 'Ω'):>12}"
             elif z >= 0:
                 zs = format_si(z, "Ω")
-                lines.append(f"{f:>8}  {zs:>12}  {zs:>12}  {'-':>12}")
+                row = f"{f_str:>8}  {zs:>12}  {zs:>12}  {'-':>12}"
             else:
-                lines.append(f"{f:>8}  {'[error]':>12}")
+                lines.append(f"{f_str:>8}  {'[error]':>12}")
+                continue
+            if has_zin:
+                zin1 = Z_ac_conn1.get(freq)
+                zin2 = Z_ac_conn2.get(freq)
+                zin1_str = format_si(abs(zin1), "Ω") if zin1 is not None else "-"
+                zin2_str = format_si(abs(zin2), "Ω") if zin2 is not None else "-"
+                row += f"  {zin1_str:>14}  {zin2_str:>14}"
+            lines.append(row)
     elif Resistance is not None and Resistance < 0:
         lines.append("")
         lines.append("ERROR: ngspice simulation failed (check installation)")
@@ -281,7 +327,7 @@ def format_result_message(
             info = CuStack[layer]
             lines.append(
                 f"  {info['name']}: {area * 1e6:.3f} mm² "
-                f"({info['thickness'] * 1e6:.0f} μm, {info['model']})"
+                f"({info['thickness'] * 1e6:.0f} μm, {info['model']} assumption)"
             )
 
     return "\n".join(lines)

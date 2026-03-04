@@ -199,6 +199,8 @@ def _run_spice(
     conn1: int,
     conn2: int,
     ac_freq: float | None = None,
+    far_node: int | None = None,
+    rload_far: float | None = None,
 ) -> float | complex:
     """Write netlist, run simulation, return impedance.
 
@@ -237,6 +239,9 @@ def _run_spice(
     Args:
         elements: list of ("R"/"L"/"C", node1, node2, value)
         ac_freq: None for DC, frequency in Hz for AC
+        far_node: when set (with rload_far), the node at the far end that gets
+            Rload to GND; port return is GND instead of conn2
+        rload_far: load resistance in Ohm placed from far_node to GND
     Returns:
         For DC: real resistance in Ohm (float)
         For AC: complex impedance in Ohm (complex)
@@ -253,19 +258,28 @@ def _run_spice(
         # ngspice does not see a floating node. At 1e15 Ω the loading is
         # < 1e-15 A/V and has no effect on the measurement.
         f.write(f"Vmeas {conn1} _p 0\n")
-        f.write(f"v1 _p {conn2} dc 0 ac 1\n")
-        f.write(f"Rref1 {conn1} 0 1e15\n")
-        f.write(f"Rref2 {conn2} 0 1e15\n")
+        if far_node is not None and rload_far is not None:
+            # Single-ended mode: port return is GND, Rload terminates far end
+            f.write("v1 _p 0 dc 0 ac 1\n")
+            f.write(f"Rref1 {conn1} 0 1e15\n")
+            f.write(f"Rload {far_node} 0 {rload_far:.15f}\n")
+        else:
+            # Differential mode (default): port return is conn2
+            f.write(f"v1 _p {conn2} dc 0 ac 1\n")
+            f.write(f"Rref1 {conn1} 0 1e15\n")
+            f.write(f"Rref2 {conn2} 0 1e15\n")
         if ac_freq:
             f.write(f".ac lin 1 {ac_freq} {ac_freq}\n")
         f.write(".end\n")
 
-    mode = f"AC @ {ac_freq:.0f} Hz" if ac_freq else "DC"
+    se_tag = " SE" if far_node is not None else ""
+    mode = f"AC{se_tag} @ {ac_freq:.0f} Hz" if ac_freq else "DC"
     log.info(
         "[SPICE] %s: %d elements, conn %s <-> %s", mode, len(elements), conn1, conn2
     )
-    with open(filename) as _f:
-        log.debug("[SPICE] netlist:\n%s", _f.read())
+    if log.isEnabledFor(logging.DEBUG):
+        with open(filename) as _f:
+            log.debug("[SPICE] netlist:\n%s", _f.read())
 
     ngspyce.source(filename)
     if ac_freq:
@@ -304,12 +318,20 @@ def RunSimulation(
     conn2: int,
     network_info: list[NetworkElement] | None = None,
     frequencies: list[float] | None = None,
-) -> tuple[float | complex, dict[float, float | complex]]:
+    rload_far: float | None = None,
+) -> tuple[
+    float | complex,
+    dict[float, float | complex],
+    dict[float, float | complex],
+    dict[float, float | complex],
+]:
     """Run DC simulation and optionally AC simulations at given frequencies.
 
     Returns:
         r_dc: DC resistance in Ohm
-        z_ac: dict {freq: impedance} for each frequency (empty if no frequencies)
+        z_ac: dict {freq: differential impedance} for each frequency
+        z_ac_conn1: dict {freq: single-ended Zin at conn1} (empty if rload_far None)
+        z_ac_conn2: dict {freq: single-ended Zin at conn2} (empty if rload_far None)
     """
     # https://github.com/ignamv/ngspyce/
     _fd, filename = tempfile.mkstemp(suffix=".net", prefix="parasitic_")
@@ -323,7 +345,9 @@ def RunSimulation(
     r_dc = _run_spice(filename, dc_elements, conn1, conn2)
 
     # --- AC: RLC network per frequency ---
-    z_ac = {}
+    z_ac: dict[float, float | complex] = {}
+    z_ac_conn1: dict[float, float | complex] = {}
+    z_ac_conn2: dict[float, float | complex] = {}
     for freq in frequencies or []:
         ac: list[SpiceElement] = []
         idx = 0
@@ -382,7 +406,27 @@ def RunSimulation(
 
         z_ac[freq] = _run_spice(filename, ac, conn1, conn2, ac_freq=freq)
 
-    return r_dc, z_ac
+        if rload_far is not None:
+            z_ac_conn1[freq] = _run_spice(
+                filename,
+                ac,
+                conn1,
+                0,
+                ac_freq=freq,
+                far_node=conn2,
+                rload_far=rload_far,
+            )
+            z_ac_conn2[freq] = _run_spice(
+                filename,
+                ac,
+                conn2,
+                0,
+                ac_freq=freq,
+                far_node=conn1,
+                rload_far=rload_far,
+            )
+
+    return r_dc, z_ac, z_ac_conn1, z_ac_conn2
 
 
 def Get_shortest_path_RES(path: list[int], resistors: list[Resistor]) -> float:
@@ -687,7 +731,14 @@ def simulate_network(
     conn2: int,
     CuStack: dict[int, CuLayer],
     frequencies: list[float] | None = None,
-) -> tuple[float | complex, dict[float, float | complex], list[NetworkElement]]:
+    rload_far: float | None = None,
+) -> tuple[
+    float | complex,
+    dict[float, float | complex],
+    dict[float, float | complex],
+    dict[float, float | complex],
+    list[NetworkElement],
+]:
     """Run DC simulation and optionally AC simulations with HF parameters.
 
     If frequencies are given, computes HF parameters via analyze_trace for each
@@ -699,10 +750,13 @@ def simulate_network(
         conn2: Second connection point (node ID)
         CuStack: Copper stackup information
         frequencies: list of frequencies in Hz for HF analysis
+        rload_far: when set, also measure single-ended Zin at conn1 and conn2
+            with this load resistance (in Ohm) at the far end
 
     Returns:
-        (resistance_dc, impedance_ac, network_info)
+        (resistance_dc, impedance_ac, z_ac_conn1, z_ac_conn2, network_info)
         network_info is enriched with "hf" key for WIRE elements if frequencies given.
+        z_ac_conn1/z_ac_conn2 are empty dicts when rload_far is None.
     """
     resistors = network["resistors"]
     network_info = network["network_info"]
@@ -730,19 +784,22 @@ def simulate_network(
             elem["hf"] = hf
 
     try:
-        resistance_dc, impedance_ac = RunSimulation(
+        resistance_dc, impedance_ac, z_ac_conn1, z_ac_conn2 = RunSimulation(
             resistors,
             conn1,
             conn2,
             network_info,
             frequencies,
+            rload_far,
         )
     except Exception:
         resistance_dc = -1
         impedance_ac = {}
+        z_ac_conn1 = {}
+        z_ac_conn2 = {}
         log.exception("RunSimulation failed")
 
-    return resistance_dc, impedance_ac, network_info
+    return resistance_dc, impedance_ac, z_ac_conn1, z_ac_conn2, network_info
 
 
 if __name__ == "__main__":
