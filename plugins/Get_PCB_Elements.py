@@ -12,7 +12,7 @@ log = logging.getLogger(__name__)
 
 
 @overload
-def ToM(value: tuple) -> tuple[float, ...]: ...
+def ToM(value: tuple[Any, ...]) -> tuple[float, ...]: ...
 @overload
 def ToM(value: int | float) -> float: ...
 
@@ -25,7 +25,7 @@ def ToM(value: Any) -> Any:
     return mm / 1000
 
 
-def SaveDictToFile(dict_name: dict, filename: str) -> None:
+def SaveDictToFile(dict_name: dict[Any, Any], filename: str) -> None:
     with open(filename, "w") as f:
         f.write("data = {\n")
         for uuid, d in list(dict_name.items()):
@@ -37,7 +37,8 @@ def SaveDictToFile(dict_name: dict, filename: str) -> None:
 
 
 def IsPointInPolygon(
-    point_: Union[Sequence[float], np.ndarray], polygon_: Sequence[Sequence[float]]
+    point_: Union[Sequence[float], "np.ndarray[Any, Any]"],
+    polygon_: Sequence[Sequence[float]],
 ) -> bool:
     """Ray casting algorithm to check if point is inside polygon."""
     x, y = point_[0], point_[1]
@@ -62,7 +63,7 @@ def IsPointInPolygon(
 
 
 def getHash(obj: pcbnew.EDA_ITEM) -> int:
-    return obj.m_Uuid.Hash()
+    return int(obj.m_Uuid.Hash())
 
 
 def getHashList(objlist: Iterable[Any]) -> list[int]:
@@ -85,15 +86,17 @@ def getLayer(obj: pcbnew.BOARD_ITEM, PossibleLayer: set[int] = {0, 31}) -> list[
 def getConnections(
     track: pcbnew.PCB_TRACK, connect: pcbnew.CONNECTIVITY_DATA
 ) -> tuple[list[int], list[int]]:
-    def getVectorLen(vector: np.ndarray) -> float:
+    def getVectorLen(vector: "np.ndarray[Any, Any]") -> float:
         return float(np.sqrt(vector.dot(vector)))
 
-    def getDistance(point1: np.ndarray, point2: np.ndarray) -> float:
+    def getDistance(
+        point1: "np.ndarray[Any, Any]", point2: "np.ndarray[Any, Any]"
+    ) -> float:
         return getVectorLen(np.array(point2) - np.array(point1))
 
     def MoveToObjCenter(
-        wirePos: np.ndarray, width: float, objPos: np.ndarray
-    ) -> np.ndarray:
+        wirePos: "np.ndarray[Any, Any]", width: float, objPos: "np.ndarray[Any, Any]"
+    ) -> "np.ndarray[Any, Any]":
         objPos = np.array(objPos)
         wirePos = np.array(wirePos)
 
@@ -101,7 +104,8 @@ def getConnections(
 
         x = np.sign(diffVector[0]) * min([abs(diffVector[0]), width / 2])
         y = np.sign(diffVector[1]) * min([abs(diffVector[1]), width / 2])
-        return wirePos + np.array([x, y])
+        result: "np.ndarray[Any, Any]" = wirePos + np.array([x, y])
+        return result
 
     ConnStart = []
     ConnEnd = []

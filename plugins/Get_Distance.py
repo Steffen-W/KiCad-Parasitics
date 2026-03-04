@@ -1,6 +1,7 @@
 import heapq
 import math
 from collections import deque
+from collections.abc import Sequence
 
 
 def dijkstra(
@@ -8,8 +9,8 @@ def dijkstra(
 ) -> tuple[dict[int, float], dict[int, int | None]]:
     distance = {node: float("inf") for node in graph}
     predecessor: dict[int, int | None] = {node: None for node in graph}
-    distance[start_node] = 0
-    queue = [(0, start_node)]
+    distance[start_node] = 0.0
+    queue: list[tuple[float, int]] = [(0.0, start_node)]
     while queue:
         current_distance, current_node = heapq.heappop(queue)
 
@@ -80,11 +81,15 @@ def find_shortest_path(
 
     path = [end_node]
     while path[-1] != start_node:
-        path.append(predecessor[path[-1]])
+        prev = predecessor[path[-1]]
+        assert prev is not None
+        path.append(prev)
     return distance[end_node], path[::-1]
 
 
-def get_graph_from_edges(edges: list) -> dict[int, dict[int, float]]:
+def get_graph_from_edges(
+    edges: Sequence[tuple[int, int, int | float]],
+) -> dict[int, dict[int, float]]:
     graph: dict[int, dict[int, float]] = {}
     for n1, n2, weight in edges:
         graph.setdefault(n1, {})[n2] = weight

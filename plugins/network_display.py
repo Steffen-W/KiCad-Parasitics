@@ -1,11 +1,12 @@
 """Network visualization and formatting for the 'Network Details' dialog."""
 
 from collections import deque
+from typing import Any
 
 try:
-    from .pcb_types import WIRE, VIA, ZONE
+    from .pcb_types import WIRE, VIA, ZONE, NetworkElement
 except ImportError:
-    from pcb_types import WIRE, VIA, ZONE
+    from pcb_types import WIRE, VIA, ZONE, NetworkElement
 
 
 def simplify_graph(
@@ -38,7 +39,7 @@ def simplify_graph(
                 changed = True
 
     # Step 2: Chain compression
-    chain_map = {}
+    chain_map: dict[tuple[int, int], list[int]] = {}
     changed = True
     while changed:
         changed = False
@@ -111,7 +112,7 @@ def find_parallel_paths(
         if node in graph:
             allowed.update(graph[node])
 
-    all_paths = []
+    all_paths: list[list[int]] = []
     queue = deque([(start, [start])])
 
     while queue and len(all_paths) < max_paths:
@@ -138,7 +139,9 @@ def find_parallel_paths(
 
 
 def render_network_ascii(
-    graph: dict[int, dict[int, float]], path: list[int], network_info: list[dict]
+    graph: dict[int, dict[int, float]],
+    path: list[int],
+    network_info: list[NetworkElement],
 ) -> str:
     """Render network path with parallel branches as ASCII.
 
@@ -159,11 +162,11 @@ def render_network_ascii(
 
     def get_res(a: int, b: int) -> float:
         key = (min(a, b), max(a, b))
-        return res_lookup[key]["resistance"] if key in res_lookup else 0
+        return float(res_lookup[key]["resistance"]) if key in res_lookup else 0.0
 
     def get_type(a: int, b: int) -> str:
         key = (min(a, b), max(a, b))
-        return res_lookup[key]["type"][0] if key in res_lookup else "?"
+        return str(res_lookup[key]["type"][0]) if key in res_lookup else "?"
 
     # Simplify graph before path search
     sgraph, chain_map = simplify_graph(graph, path[0], path[-1])
@@ -250,7 +253,7 @@ def render_network_ascii(
     lines.append(f"n{all_paths[0][plen - 1]}")
 
     # Build prefix trie for correct indentation
-    trie = {}
+    trie: dict[Any, Any] = {}
     for mid in mids:
         node = trie
         for step in mid[1:]:  # skip split node (already printed)
@@ -269,9 +272,9 @@ def render_network_ascii(
             full.extend(expanded[1:])
         return sum(get_res(full[i], full[i + 1]) for i in range(len(full) - 1))
 
-    def render_trie(node: dict, parent: int, prefix_str: str) -> None:
+    def render_trie(trie_node: dict[Any, Any], parent: int, prefix_str: str) -> None:
         """Recursively render trie branches.  parent = last printed node."""
-        children = {k: v for k, v in node.items() if k != "_leaf"}
+        children = {k: v for k, v in trie_node.items() if k != "_leaf"}
         child_list = sorted(children.keys())
         for idx, child in enumerate(child_list):
             is_last = idx == len(child_list) - 1
@@ -293,8 +296,8 @@ def render_network_ascii(
 
             # Expand compressed edges for display
             display_nodes = [parent]
-            for node in chain:
-                expanded = expand_edge(display_nodes[-1], node)
+            for chain_step in chain:
+                expanded = expand_edge(display_nodes[-1], chain_step)
                 display_nodes.extend(expanded[1:])
             display_nodes = display_nodes[1:]  # remove parent (already printed)
 
@@ -334,7 +337,7 @@ def render_network_ascii(
 
 
 def format_network_info(
-    network_info: list[dict],
+    network_info: list[NetworkElement],
     graph: dict[int, dict[int, float]] | None = None,
     path: list[int] | None = None,
 ) -> str:
@@ -385,7 +388,7 @@ def format_network_info(
 if __name__ == "__main__":
     # Minimal test: dead-ends (7,8), chain compression (3,4), parallel branch (2→9→5)
     #   1→2→3→4→5→6   dead-end 3→7→8   parallel 2→9→5
-    def _w(n1: int, n2: int, r: float) -> dict:
+    def _w(n1: int, n2: int, r: float) -> NetworkElement:
         return {
             "type": WIRE,
             "nodes": (n1, n2),

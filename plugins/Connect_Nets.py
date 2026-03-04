@@ -26,7 +26,7 @@ def Connect_Nets(data: dict[Any, dict[str, Any]]) -> dict[Any, dict[str, Any]]:
         data[uuid].setdefault("net_start", defaultdict(lambda: NOT_ASSIGNED))
         data[uuid].setdefault("net_end", defaultdict(lambda: NOT_ASSIGNED))
 
-    def getNet(conn: Any, uuid: Any, layer: int, pos: tuple = (0, 0)) -> int:
+    def getNet(conn: Any, uuid: Any, layer: int, pos: tuple[Any, ...] = (0, 0)) -> int:
         """
         Retrieves the network ID from a connected element.
 
@@ -54,22 +54,22 @@ def Connect_Nets(data: dict[Any, dict[str, Any]]) -> dict[Any, dict[str, Any]]:
         if conn_data["type"] == WIRE:
             # For wires: check which end connects to us based on connection list
             if uuid in conn_data.get("conn_start", []):
-                return conn_data["net_start"].get(layer, NOT_ASSIGNED)
+                return int(conn_data["net_start"].get(layer, NOT_ASSIGNED))
             elif uuid in conn_data.get("conn_end", []):
-                return conn_data["net_end"].get(layer, NOT_ASSIGNED)
+                return int(conn_data["net_end"].get(layer, NOT_ASSIGNED))
             # Fallback: try to match by position (for incomplete connection data)
             if pos == conn_data.get("start", (0, 0)):
-                return conn_data["net_start"].get(layer, NOT_ASSIGNED)
+                return int(conn_data["net_start"].get(layer, NOT_ASSIGNED))
             if pos == conn_data.get("end", (0, 0)):
-                return conn_data["net_end"].get(layer, NOT_ASSIGNED)
+                return int(conn_data["net_end"].get(layer, NOT_ASSIGNED))
             # No match found - connection data is corrupt/incomplete
             return ERROR
         else:
             # For vias/pads: use netStart (they have single connection point per layer)
-            return conn_data["net_start"].get(layer, NOT_ASSIGNED)
+            return int(conn_data["net_start"].get(layer, NOT_ASSIGNED))
 
     def setNet(
-        conn: Any, uuid: Any, layer: int, newNet: int, pos: tuple = (0, 0)
+        conn: Any, uuid: Any, layer: int, newNet: int, pos: tuple[Any, ...] = (0, 0)
     ) -> None:
         """
         Sets the network ID on a connected element.

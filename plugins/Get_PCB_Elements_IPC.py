@@ -93,11 +93,12 @@ def _pos_m(vec2: Any) -> tuple[float, float]:
 
 def _layer_v9(bl: Any) -> int | None:
     """BoardLayer enum → v9 layer int (same numbering as Get_PCB_Stackup)."""
-    return extract_layer_from_string(canonical_name(bl))
+    result: int | None = extract_layer_from_string(canonical_name(bl))
+    return result
 
 
-def _obj_id(obj: Any) -> int:
-    return obj.id.value
+def _obj_id(obj: Any) -> str:
+    return str(obj.id.value)
 
 
 def _arc_geometry(
@@ -226,7 +227,9 @@ def _expand_nets_via_net_ties(board: Board, initial_nets: Any) -> Any:
     return expanded, net_tie_fps
 
 
-def _collect_footprint_shapes(fp: FootprintInstance, enabled_layers: Any) -> dict:
+def _collect_footprint_shapes(
+    fp: FootprintInstance, enabled_layers: Any
+) -> dict[Any, Any]:
     """Collect copper shapes from a footprint as WIRE elements.
 
     Returns:
@@ -272,7 +275,7 @@ def _collect_footprint_shapes(fp: FootprintInstance, enabled_layers: Any) -> dic
                 "is_selected": False,
                 "conn_start": [],
                 "conn_end": [],
-                "_midline_pts": [start, end],
+                "midline_pts": [start, end],
                 "_outline": [
                     (start[0] + nx, start[1] + ny),
                     (end[0] + nx, end[1] + ny),
@@ -303,28 +306,28 @@ def _collect_footprint_shapes(fp: FootprintInstance, enabled_layers: Any) -> dic
                 "is_selected": False,
                 "conn_start": [],
                 "conn_end": [],
-                "_midline_pts": [start, end],
+                "midline_pts": [start, end],
             }
             if r_m is not None:
                 item["radius"] = r_m
                 if center is not None:
                     assert arc_sa is not None
-                    item["_midline_pts"] = [start] + _arc_points(
+                    item["midline_pts"] = [start] + _arc_points(
                         center, r_m, arc_sa, angle, width
                     )
-            item["_outline"] = _outline_from_midline(item["_midline_pts"], width / 2)
+            item["_outline"] = _outline_from_midline(item["midline_pts"], width / 2)
             items[oid] = item
 
     return items
 
 
-def Get_PCB_Elements_IPC(board: Board):
+def Get_PCB_Elements_IPC(board: Board) -> dict[Any, Any]:
     """Collect all tracks/vias/pads/zones from the board via IPC API.
 
     Returns ItemList in the same dict format as
     Get_PCB_Elements.Get_PCB_Elements().
     """
-    selection_ids = {item.id.value for item in board.get_selection()}  # type: ignore[attr-defined]
+    selection_ids = {item.id.value for item in board.get_selection()}
     log.info("Selection: %d items", len(selection_ids))
 
     # Get enabled copper layers from board
@@ -341,7 +344,7 @@ def Get_PCB_Elements_IPC(board: Board):
             selection = fp_pads
             selection_ids = {pad.id.value for pad in fp_pads}
 
-    nets = {item.net.name for item in selection if hasattr(item, "net")}  # type: ignore[attr-defined]
+    nets = {item.net.name for item in selection if hasattr(item, "net")}
 
     if len(selection) != 2:
         log.warning("Expected 2 selected items, got %d", len(selection))
@@ -359,7 +362,7 @@ def Get_PCB_Elements_IPC(board: Board):
 
     log.info("Target nets: %s", target_nets)
 
-    ItemList = {}
+    ItemList: dict[Any, Any] = {}
 
     # --- Tracks & Arcs ---
     for track in board.get_tracks():
@@ -413,11 +416,11 @@ def Get_PCB_Elements_IPC(board: Board):
             temp["angle"] = arc_sweep
             temp["length"] = arc_length
             temp["area"] = width * arc_length
-            temp["_midline_pts"] = midline
+            temp["midline_pts"] = midline
             temp["_outline"] = _outline_from_midline(midline, width / 2)
         else:
             # Straight wire: simple outline and midline
-            temp["_midline_pts"] = [start, end]
+            temp["midline_pts"] = [start, end]
             wr = width / 2
             nx, ny = -dy / length * wr, dx / length * wr
             temp["_outline"] = [
@@ -734,7 +737,7 @@ def _outline_from_midline(
     return left + right[::-1]
 
 
-def _compute_bbox(d: dict) -> tuple[float, float, float, float]:
+def _compute_bbox(d: dict[str, Any]) -> tuple[float, float, float, float]:
     """Compute bounding box (min_x, min_y, max_x, max_y) for an element."""
     if "_outline" in d:
         xs = [p[0] for p in d["_outline"]]
@@ -762,7 +765,7 @@ def _bboxes_overlap(
 
 
 def _point_in_pad(
-    point: tuple[float, float], pad_data: dict, margin: float = 0
+    point: tuple[float, float], pad_data: dict[str, Any], margin: float = 0
 ) -> bool:
     """Check if point is within pad shape (circle/rect/oval) + margin.
 
@@ -786,23 +789,23 @@ def _point_in_pad(
 
     if shape == 1:  # circle
         r = max(rx, ry)
-        return dx * dx + dy * dy <= r * r
+        return bool(dx * dx + dy * dy <= r * r)
     elif shape == 3:  # oval
         if rx > ry:
             straight = rx - ry
             if dx <= straight:
-                return dy <= ry
-            return (dx - straight) ** 2 + dy * dy <= ry * ry
+                return bool(dy <= ry)
+            return bool((dx - straight) ** 2 + dy * dy <= ry * ry)
         else:
             straight = ry - rx
             if dy <= straight:
-                return dx <= rx
-            return dx * dx + (dy - straight) ** 2 <= rx * rx
+                return bool(dx <= rx)
+            return bool(dx * dx + (dy - straight) ** 2 <= rx * rx)
     else:  # rectangle, roundrect, chamferedrect, unknown -> rect
-        return dx <= rx and dy <= ry
+        return bool(dx <= rx and dy <= ry)
 
 
-def _build_connectivity(ItemList: dict) -> None:
+def _build_connectivity(ItemList: dict[Any, Any]) -> None:
     """Build conn_start/conn_end by matching coordinates.
 
     # TODO: Split into named sub-steps with guard clauses; function currently
@@ -890,7 +893,7 @@ def _build_connectivity(ItemList: dict) -> None:
                 _add_conn(pt_oid, ep, pad_oid, "position")
 
     # Wire-body connectivity: T-junctions, wire-through-pad, wire-through-zone
-    # For arcs, use pre-computed _midline_pts segments so that the
+    # For arcs, use pre-computed midline_pts segments so that the
     # straight-line distance checks work correctly.
     for wire_oid, wire_d in wires.items():
         wire_bbox = bboxes[wire_oid]
@@ -900,7 +903,7 @@ def _build_connectivity(ItemList: dict) -> None:
         ex, ey = wire_d["end"]
 
         # Build list of line segments approximating this wire
-        midline = wire_d.get("_midline_pts")
+        midline = wire_d.get("midline_pts")
         if midline is not None and len(midline) > 2:
             segments = [
                 (midline[k][0], midline[k][1], midline[k + 1][0], midline[k + 1][1])

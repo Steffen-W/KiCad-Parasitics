@@ -2,10 +2,30 @@ import logging
 import math
 import os
 import tempfile
+from typing import Any, NamedTuple
 import numpy as np
 
+
+class Resistor(NamedTuple):
+    """A resistive edge in the PCB copper network."""
+
+    node1: int
+    node2: int
+    resistance: float  # DC resistance in Ohm
+    length: float  # physical length in m
+
+
 try:
-    from .pcb_types import WIRE, VIA, PAD, ZONE
+    from .pcb_types import (
+        WIRE,
+        VIA,
+        PAD,
+        ZONE,
+        NetworkElement,
+        CuLayer,
+        DielectricInfo,
+        SpiceElement,
+    )
     from .Get_Distance import (
         find_shortest_path,
         get_graph_from_edges,
@@ -33,7 +53,16 @@ except ImportError:
         analyze_coplanar,
     )
     import ngspyce
-    from pcb_types import WIRE, VIA, PAD, ZONE
+    from pcb_types import (
+        WIRE,
+        VIA,
+        PAD,
+        ZONE,
+        NetworkElement,
+        CuLayer,
+        DielectricInfo,
+        SpiceElement,
+    )
 
 log = logging.getLogger(__name__)
 
@@ -42,9 +71,9 @@ def analyze_trace(
     length: float,
     width: float,
     cu_layer_id: int,
-    CuStack: dict,
+    CuStack: dict[int, CuLayer],
     frequency: float = 100e6,
-) -> dict:
+) -> dict[str, Any]:
     """Analyze a PCB trace with frequency-dependent parameters.
 
     Args:
@@ -108,6 +137,7 @@ def analyze_trace(
 
     elif model == "Microstrip" and (die_above or die_below):
         die = die_above if die_above else die_below
+        assert die is not None
         result = analyze_microstrip(
             w=width,
             h=die["h"],
@@ -119,6 +149,7 @@ def analyze_trace(
         )
     elif model in ("Coplanar", "Coplanar_Grounded") and (die_above or die_below):
         die = die_above if die_above else die_below
+        assert die is not None
         gap = layer.get("gap")
         if gap is None or gap <= 0:
             return dc_only
@@ -163,9 +194,45 @@ def analyze_trace(
 
 
 def _run_spice(
-    filename: str, elements: list, conn1: int, conn2: int, ac_freq: float | None = None
+    filename: str,
+    elements: list[SpiceElement],
+    conn1: int,
+    conn2: int,
+    ac_freq: float | None = None,
 ) -> float | complex:
     """Write netlist, run simulation, return impedance.
+
+    Circuit topology
+    ----------------
+    The DUT (R/L/C network) is connected between conn1 and conn2.
+    Capacitors inside the DUT reference GND (node 0) as the ground plane.
+    Vmeas (0 V) and v1 (1 V AC) are in series and form the port excitation.
+    Two large Rref resistors anchor both port nodes to GND for DC convergence.
+
+    conn1 o──────────────────── DUT ─────────────────── o conn2
+          │       [R─L series per seg,                  │
+          │        C shunt to GND per seg]              │
+        [Rref1]                                      [Rref2]
+        [1e15Ω]                                      [1e15Ω]
+          │                                             │
+         GND                                           GND
+
+    Port excitation / current sense (series branch):
+
+    conn1 o──(+)Vmeas 0V(-)──o _p ──(+)v1 AC=1V(-)──o conn2
+
+    Voltage relations (from the two sources in series):
+        V(conn1) - V(_p)   = 0 V   → V(conn1) = V(_p)
+        V(_p)   - V(conn2) = 1 V
+        ──────────────────────────
+        V(conn1) - V(conn2) = 1 V  (effective port voltage)
+
+    Sign convention (verified with DUT = 50 Ω → result must be +50 Ω):
+        Z = -1 / I(Vmeas)
+    ngspice defines I(Vmeas) as positive when current flows from conn1
+    into the (+) terminal of Vmeas; with a resistive DUT that current
+    flows conn2 → v1 → _p → Vmeas → conn1 → DUT → conn2, so
+    I(Vmeas) < 0 and the minus sign yields a positive Z.
 
     Args:
         elements: list of ("R"/"L"/"C", node1, node2, value)
@@ -175,13 +242,20 @@ def _run_spice(
         For AC: complex impedance in Ohm (complex)
         On error: -1
     """
-    Rshunt = 0.1
     with open(filename, "w") as f:
         f.write("* Parasitic Network\n")
         for idx, (kind, na, nb, val) in enumerate(elements, 1):
             f.write(f"{kind}{idx} {na} {nb} {val:.15f}\n")
-        f.write(f"v1 {conn1} 0 dc 0 ac 1\n")
-        f.write(f"Rshunt 0 {conn2} {Rshunt}\n")
+        # Port excitation between conn1 and conn2.
+        # Vmeas (0 V) measures the port current; V1 drives conn1–conn2 = 1 V.
+        # Z = V_port / I_into_port = 1 / (-I(Vmeas)).
+        # Rref1/2 (1e15 Ω) provide a DC path for both port nodes so that
+        # ngspice does not see a floating node. At 1e15 Ω the loading is
+        # < 1e-15 A/V and has no effect on the measurement.
+        f.write(f"Vmeas {conn1} _p 0\n")
+        f.write(f"v1 _p {conn2} dc 0 ac 1\n")
+        f.write(f"Rref1 {conn1} 0 1e15\n")
+        f.write(f"Rref2 {conn2} 0 1e15\n")
         if ac_freq:
             f.write(f".ac lin 1 {ac_freq} {ac_freq}\n")
         f.write(".end\n")
@@ -190,6 +264,8 @@ def _run_spice(
     log.info(
         "[SPICE] %s: %d elements, conn %s <-> %s", mode, len(elements), conn1, conn2
     )
+    with open(filename) as _f:
+        log.debug("[SPICE] netlist:\n%s", _f.read())
 
     ngspyce.source(filename)
     if ac_freq:
@@ -200,29 +276,33 @@ def _run_spice(
 
     log.info("[SPICE] done")
 
-    vout = ngspyce.vector(str(conn2))
-    if len(vout) > 0 and vout[0] != 0:
-        z = (1 - vout[0]) / (vout[0] / Rshunt)
+    i_meas = ngspyce.vector("vmeas#branch")
+    if len(i_meas) > 0 and i_meas[0] != 0:
+        z: float | complex = -1.0 / i_meas[0]
         if ac_freq and isinstance(z, complex):
+            # S11 with Z0=50 Ω reference — informational only, not returned
+            z0_ref = 50.0
+            s11 = (z - z0_ref) / (z + z0_ref)
             log.info(
-                "[SPICE]   vout=%s, Z=%.3f mOhm (%.3f + j%.3f mΩ)",
-                f"{vout[0]:.6e}",
+                "[SPICE]   I=%s, Z=%.3f mΩ (%.3f + j%.3f mΩ)  S11=%.2f dB",
+                f"{i_meas[0]:.6e}",
                 abs(z) * 1000,
                 z.real * 1000,
                 z.imag * 1000,
+                20 * math.log10(abs(s11) + 1e-15),
             )
         else:
-            log.info("[SPICE]   vout=%s, Z=%.3f mOhm", f"{vout[0]:.6e}", abs(z) * 1000)
-        return z  # Return complex for AC, real for DC
-    log.warning("[SPICE]   vout=%s, simulation failed", vout)
+            log.info("[SPICE]   I=%s, Z=%.3f mOhm", f"{i_meas[0]:.6e}", abs(z) * 1000)
+        return z
+    log.warning("[SPICE]   I=%s, simulation failed", i_meas)
     return -1
 
 
 def RunSimulation(
-    resistors: list,
+    resistors: list[Resistor],
     conn1: int,
     conn2: int,
-    network_info: list | None = None,
+    network_info: list[NetworkElement] | None = None,
     frequencies: list[float] | None = None,
 ) -> tuple[float | complex, dict[float, float | complex]]:
     """Run DC simulation and optionally AC simulations at given frequencies.
@@ -237,13 +317,15 @@ def RunSimulation(
     gnd = 0
 
     # --- DC: R-only network ---
-    dc_elements = [("R", r[0], r[1], r[2]) for r in resistors]
+    dc_elements: list[SpiceElement] = [
+        ("R", r.node1, r.node2, r.resistance) for r in resistors
+    ]
     r_dc = _run_spice(filename, dc_elements, conn1, conn2)
 
     # --- AC: RLC network per frequency ---
     z_ac = {}
     for freq in frequencies or []:
-        ac = []
+        ac: list[SpiceElement] = []
         idx = 0
         for elem in network_info or []:
             n1, n2 = elem["nodes"]
@@ -261,11 +343,15 @@ def RunSimulation(
 
                 if L:
                     # Distributed RLGC model (n_seg=1 for lumped)
+                    # TODO: Use π-topology (C/2 at both segment ends) instead of
+                    # L-topology (C at left end only). π is more accurate at high
+                    # electrical lengths but requires adding C_seg/2 at n2 of last
+                    # segment as well, which needs care at network junctions.
                     R_seg, L_seg = R / n_seg, L / n_seg
                     C_seg = C / n_seg if C else None
-                    prev = n1
+                    prev: int | str = n1
                     for s in range(n_seg):
-                        nxt = n2 if s == n_seg - 1 else f"w{idx}s{s}"
+                        nxt: int | str = n2 if s == n_seg - 1 else f"w{idx}s{s}"
                         mid = f"w{idx}s{s}m"
                         ac.append(("R", prev, mid, R_seg))
                         ac.append(("L", mid, nxt, L_seg))
@@ -299,15 +385,19 @@ def RunSimulation(
     return r_dc, z_ac
 
 
-def Get_shortest_path_RES(path: list[int], resistors: list) -> float:
-    res_map = {(min(a, b), max(a, b)): r for a, b, r in resistors}
+def Get_shortest_path_RES(path: list[int], resistors: list[Resistor]) -> float:
+    res_map = {
+        (min(r.node1, r.node2), max(r.node1, r.node2)): r.resistance for r in resistors
+    }
     return sum(
         res_map[min(path[i - 1], path[i]), max(path[i - 1], path[i])]
         for i in range(1, len(path))
     )
 
 
-def extract_network(data: dict, CuStack: dict, netcode: int | None = None) -> dict:
+def extract_network(
+    data: dict[Any, Any], CuStack: dict[int, CuLayer], netcode: int | None = None
+) -> dict[str, Any]:
     """Extract electrical network from PCB data (DC resistances only).
 
     # TODO: Split into separate functions for wire, via, and zone resistance
@@ -327,9 +417,9 @@ def extract_network(data: dict, CuStack: dict, netcode: int | None = None) -> di
             graph: adjacency dict from get_graph_from_edges
     """
 
-    resistors = []
-    network_info = []
-    coordinates = {}
+    resistors: list[Resistor] = []
+    network_info: list[NetworkElement] = []
+    coordinates: dict[int, tuple[float, float, float]] = {}
     Area = {layer_idx: 0 for layer_idx in range(32)}
 
     for uuid, d in data.items():
@@ -376,7 +466,9 @@ def extract_network(data: dict, CuStack: dict, netcode: int | None = None) -> di
                         via = get_Via_Parasitics(d["drill"], thickness, distance)
                         if via["resistance"] < 0:
                             raise ValueError("Error in resistance calculation!")
-                        resistors.append([node1, node2, via["resistance"], distance])
+                        resistors.append(
+                            Resistor(node1, node2, via["resistance"], distance)
+                        )
                         network_info.append(
                             {
                                 "type": VIA,
@@ -424,9 +516,9 @@ def extract_network(data: dict, CuStack: dict, netcode: int | None = None) -> di
                         f"Invalid resistance for WIRE (layer={Layer}, "
                         f"length={d['length']}, width={d['width']}): r_dc={trace['r_dc']}"
                     )
-                resistors.append([netStart, netEnd, trace["r_dc"], d["length"]])
+                resistors.append(Resistor(netStart, netEnd, trace["r_dc"], d["length"]))
 
-                info = {
+                info: NetworkElement = {
                     "type": WIRE,
                     "nodes": (netStart, netEnd),
                     "resistance": trace["r_dc"],
@@ -437,9 +529,14 @@ def extract_network(data: dict, CuStack: dict, netcode: int | None = None) -> di
                     "start": d["start"],
                     "end": d["end"],
                 }
-                for key in ("mid", "radius", "angle", "_midline_pts"):
-                    if key in d:
-                        info[key] = d[key]
+                if "mid" in d:
+                    info["mid"] = d["mid"]
+                if "radius" in d:
+                    info["radius"] = d["radius"]
+                if "angle" in d:
+                    info["angle"] = d["angle"]
+                if "midline_pts" in d:
+                    info["midline_pts"] = d["midline_pts"]
                 network_info.append(info)
 
                 coordinates[netStart] = (
@@ -467,7 +564,7 @@ def extract_network(data: dict, CuStack: dict, netcode: int | None = None) -> di
     area = {layer_idx: Area[layer_idx] for layer_idx in Area if Area[layer_idx] > 0}
 
     # Handle ZONES: connect all elements touching the same zone
-    zone_connections = {}
+    zone_connections: dict[int, dict[Any, list[int]]] = {}
     for uuid, d in data.items():
         if (netcode is not None and d["net_code"] != netcode) or d["type"] != ZONE:
             continue
@@ -510,9 +607,9 @@ def extract_network(data: dict, CuStack: dict, netcode: int | None = None) -> di
     zone_resistance = 0.001  # 1 mOhm
     for layer, zones in zone_connections.items():
         layer_name = CuStack[layer]["name"] if layer in CuStack else f"Layer_{layer}"
-        for _, nodes in zones.items():
-            for i, node1 in enumerate(nodes):
-                for node2 in nodes[i + 1 :]:
+        for zone_nodes in zones.values():
+            for i, node1 in enumerate(zone_nodes):
+                for node2 in zone_nodes[i + 1 :]:
                     zone_distance = 0.0
                     if node1 in coordinates and node2 in coordinates:
                         c1 = coordinates[node1]
@@ -520,7 +617,9 @@ def extract_network(data: dict, CuStack: dict, netcode: int | None = None) -> di
                         zone_distance = np.sqrt(
                             (c1[0] - c2[0]) ** 2 + (c1[1] - c2[1]) ** 2
                         )
-                    resistors.append([node1, node2, zone_resistance, zone_distance])
+                    resistors.append(
+                        Resistor(node1, node2, zone_resistance, zone_distance)
+                    )
                     network_info.append(
                         {
                             "type": ZONE,
@@ -533,7 +632,7 @@ def extract_network(data: dict, CuStack: dict, netcode: int | None = None) -> di
                     )
 
     # Build graph
-    edges = [(i[0], i[1], i[3]) for i in resistors]
+    edges = [(r.node1, r.node2, r.length) for r in resistors]
     graph = get_graph_from_edges(edges)
 
     return {
@@ -545,7 +644,9 @@ def extract_network(data: dict, CuStack: dict, netcode: int | None = None) -> di
     }
 
 
-def find_path(network: dict, conn1: int, conn2: int) -> tuple[float, list[int], float]:
+def find_path(
+    network: dict[str, Any], conn1: int, conn2: int
+) -> tuple[float, list[int], float]:
     """Find shortest path between two nodes in the network.
 
     Args:
@@ -558,7 +659,7 @@ def find_path(network: dict, conn1: int, conn2: int) -> tuple[float, list[int], 
     """
     graph = network["graph"]
     resistors = network["resistors"]
-    edges = [(i[0], i[1], i[3]) for i in resistors]
+    edges = [(r.node1, r.node2, r.length) for r in resistors]
 
     try:
         distance, path = find_shortest_path(graph, conn1, conn2)
@@ -567,7 +668,7 @@ def find_path(network: dict, conn1: int, conn2: int) -> tuple[float, list[int], 
         short_path_res = -1
         distance = float("inf")
         path = []
-        log.debug("Path finding failed: %s", e)
+        log.warning("Path finding failed: %s", e)
         log.debug("Graph: %d nodes, %d edges", len(graph), len(edges))
         if conn1 not in graph:
             log.debug("conn1=%s NOT in graph", conn1)
@@ -581,12 +682,12 @@ def find_path(network: dict, conn1: int, conn2: int) -> tuple[float, list[int], 
 
 
 def simulate_network(
-    network: dict,
+    network: dict[str, Any],
     conn1: int,
     conn2: int,
-    CuStack: dict,
+    CuStack: dict[int, CuLayer],
     frequencies: list[float] | None = None,
-) -> tuple[float | complex, dict[float, float | complex], list[dict]]:
+) -> tuple[float | complex, dict[float, float | complex], list[NetworkElement]]:
     """Run DC simulation and optionally AC simulations with HF parameters.
 
     If frequencies are given, computes HF parameters via analyze_trace for each
@@ -625,7 +726,8 @@ def simulate_network(
                     f / 1e6,
                     max(1, int(wr / 0.05) + 1),
                 )
-        elem["hf"] = hf
+        if hf:
+            elem["hf"] = hf
 
     try:
         resistance_dc, impedance_ac = RunSimulation(
@@ -644,12 +746,12 @@ def simulate_network(
 
 
 if __name__ == "__main__":
-    die_core = {"h": 1.51e-3, "epsilon_r": 4.5, "loss_tangent": 0.02}
-    die_pp = {"h": 0.2e-3, "epsilon_r": 4.5, "loss_tangent": 0.02}
-    die_core2 = {"h": 1.0e-3, "epsilon_r": 4.3, "loss_tangent": 0.02}
+    die_core: DielectricInfo = {"h": 1.51e-3, "epsilon_r": 4.5, "loss_tangent": 0.02}
+    die_pp: DielectricInfo = {"h": 0.2e-3, "epsilon_r": 4.5, "loss_tangent": 0.02}
+    die_core2: DielectricInfo = {"h": 1.0e-3, "epsilon_r": 4.3, "loss_tangent": 0.02}
 
     # 2-Layer: F.Cu/B.Cu → Microstrip
-    cu_2L = {
+    cu_2L: dict[int, CuLayer] = {
         0: {
             "thickness": 35e-6,
             "name": "F.Cu",
@@ -672,7 +774,7 @@ if __name__ == "__main__":
         assert tr["z0"] is not None and tr["r_ac"] > tr["r_dc"]
 
     # 4-Layer: F.Cu/B.Cu → Microstrip, In1/In2 → Stripline
-    cu_4L = {
+    cu_4L: dict[int, CuLayer] = {
         0: {
             "thickness": 35e-6,
             "name": "F.Cu",
@@ -711,7 +813,9 @@ if __name__ == "__main__":
         assert tr["z0"] is not None and tr["r_ac"] > tr["r_dc"]
 
     # No dielectric → DC-only
-    cu_fb = {0: {"thickness": 35e-6, "name": "F.Cu", "abs_height": 0.0}}
+    cu_fb: dict[int, CuLayer] = {
+        0: {"thickness": 35e-6, "name": "F.Cu", "abs_height": 0.0}
+    }
     tr = analyze_trace(0.01, 0.2e-3, 0, cu_fb, 100e6)
     assert tr["r_ac"] == tr["r_dc"] and tr["z0"] is None
 

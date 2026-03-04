@@ -1,4 +1,5 @@
 from math import atan, cosh, exp, log, log1p, pi, sinh, sqrt, tanh
+from typing import Any
 
 # Physical constants (SI units)
 v_0 = 299792458  # m/s speed of light (exact by SI definition)
@@ -50,7 +51,7 @@ def _skin_depth(frequency: float, sigma: float, mu_r: float = 1.0) -> float:
     return 1.0 / sqrt(pi * frequency * mu_r * mu_0 * sigma)
 
 
-def _validate_microstrip(w: float, h: float, epsilon_r: float):
+def _validate_microstrip(w: float, h: float, epsilon_r: float) -> None:
     """Validate microstrip parameters."""
     if w <= 0 or h <= 0:
         raise ValueError(f"w and h must be > 0, got w={w}, h={h}")
@@ -58,7 +59,7 @@ def _validate_microstrip(w: float, h: float, epsilon_r: float):
         raise ValueError(f"epsilon_r must be > 0, got {epsilon_r}")
 
 
-def _validate_stripline(w: float, h: float, t: float, epsilon_r: float):
+def _validate_stripline(w: float, h: float, t: float, epsilon_r: float) -> None:
     """Validate stripline parameters."""
     if w <= 0 or h <= 0:
         raise ValueError(f"w and h must be > 0, got w={w}, h={h}")
@@ -77,7 +78,7 @@ def _validate_stripline(w: float, h: float, t: float, epsilon_r: float):
             )
 
 
-def _validate_coplanar(w: float, gap: float, epsilon_r: float):
+def _validate_coplanar(w: float, gap: float, epsilon_r: float) -> None:
     """Validate coplanar waveguide parameters."""
     if w <= 0 or gap <= 0:
         raise ValueError(f"w and gap must be > 0, got w={w}, gap={gap}")
@@ -85,7 +86,7 @@ def _validate_coplanar(w: float, gap: float, epsilon_r: float):
         raise ValueError(f"epsilon_r must be > 0, got {epsilon_r}")
 
 
-def get_Microstrip_eps_eff(w: float, h: float, epsilon_r: float):
+def get_Microstrip_eps_eff(w: float, h: float, epsilon_r: float) -> float:
     """Calculate effective permittivity of microstrip (quasi-static, t=0).
 
     Args:
@@ -110,7 +111,7 @@ def get_Microstrip_eps_eff(w: float, h: float, epsilon_r: float):
     return eps_eff
 
 
-def get_Microstrip_Z0(w: float, h: float, epsilon_r: float):
+def get_Microstrip_Z0(w: float, h: float, epsilon_r: float) -> float:
     """Calculate characteristic impedance of microstrip (quasi-static, t=0).
 
     Args:
@@ -134,7 +135,7 @@ def get_Microstrip_Z0(w: float, h: float, epsilon_r: float):
     return Z0
 
 
-def get_Microstrip_Cap(w: float, h: float, length: float, epsilon_r: float):
+def get_Microstrip_Cap(w: float, h: float, length: float, epsilon_r: float) -> float:
     """Calculate capacitance of microstrip trace.
 
     Derived consistently from Z0 and phase velocity: C = length / (Z0 * v_p)
@@ -153,7 +154,7 @@ def get_Microstrip_Cap(w: float, h: float, length: float, epsilon_r: float):
     return length / (Z0 * v_p)
 
 
-def get_Microstrip_Ind(w: float, h: float, length: float, epsilon_r: float):
+def get_Microstrip_Ind(w: float, h: float, length: float, epsilon_r: float) -> float:
     """Calculate inductance of microstrip trace.
 
     Derived consistently from Z0 and phase velocity: L = Z0 * length / v_p
@@ -194,7 +195,7 @@ def _microstrip_filling_factor(u: float, epsilon_r: float) -> float:
     u2, u3, u4 = u * u, u * u * u, u * u * u * u
     a = 1 + log((u4 + u2 / 2704) / (u4 + 0.432)) / 49 + log(1 + u3 / 5929.741) / 18.7
     b = 0.564 * pow((epsilon_r - 0.9) / (epsilon_r + 3), 0.053)
-    return pow(1 + 10 / u, -a * b)
+    return float(pow(1 + 10 / u, -a * b))
 
 
 def _microstrip_Z0_homogeneous(u: float) -> float:
@@ -283,7 +284,7 @@ def _microstrip_er_dispersion(u: float, epsilon_r: float, f_n: float) -> float:
     P2 = 0.33622 * (1 - exp(-0.03442 * epsilon_r))
     P3 = 0.0363 * exp(-4.6 * u) * (1 - exp(-pow(f_n / 38.7, 4.97)))
     P4 = 1 + 2.751 * (1 - exp(-pow(epsilon_r / 15.916, 8)))
-    return P1 * P2 * pow((P3 * P4 + 0.1844) * f_n, 1.5763)
+    return float(P1 * P2 * pow((P3 * P4 + 0.1844) * f_n, 1.5763))
 
 
 def _microstrip_Z0_dispersion(
@@ -333,7 +334,7 @@ def _microstrip_Z0_dispersion(
     R15 = 0.707 * R10 * pow(f_n / 12.3, 1.097)
     R16 = 1 + 0.0503 * epsilon_r * epsilon_r * R11 * (1 - exp(-pow(u / 15, 6)))
     R17 = R7 * (1 - 1.1241 * (R12 / R16) * exp(-0.026 * pow(f_n, 1.15656) - R15))
-    return pow(R13 / R14, R17)
+    return float(pow(R13 / R14, R17))
 
 
 def analyze_microstrip(
@@ -349,7 +350,7 @@ def analyze_microstrip(
     h_t: float | None = None,
     mu_r: float = 1.0,
     mu_rc: float = 1.0,
-) -> dict:
+) -> dict[str, Any]:
     """Frequency-dependent analysis of microstrip transmission line.
 
     Calculates Z0, effective permittivity, losses, and electrical length
@@ -485,7 +486,7 @@ def analyze_microstrip(
     }
 
 
-def get_Stripline_Z0(w: float, h: float, t: float, epsilon_r: float):
+def get_Stripline_Z0(w: float, h: float, t: float, epsilon_r: float) -> float:
     """Calculate characteristic impedance of stripline (symmetric).
 
     Args:
@@ -627,7 +628,7 @@ def analyze_stripline(
     tan_d: float = 0.0,
     sigma: float = 5.8e7,
     mu_rc: float = 1.0,
-) -> dict:
+) -> dict[str, Any]:
     """Frequency-dependent analysis of asymmetric stripline transmission line.
 
     The trace is positioned at distance 'a' from the bottom ground plane.
@@ -721,7 +722,9 @@ def analyze_stripline(
     }
 
 
-def get_Stripline_Cap(w: float, h: float, length: float, t: float, epsilon_r: float):
+def get_Stripline_Cap(
+    w: float, h: float, length: float, t: float, epsilon_r: float
+) -> float:
     """Calculate capacitance of stripline trace.
 
     Derived consistently from Z0 and phase velocity: C = length / (Z0 * v_p)
@@ -741,7 +744,9 @@ def get_Stripline_Cap(w: float, h: float, length: float, t: float, epsilon_r: fl
     return length / (Z0 * v_p)
 
 
-def get_Stripline_Ind(w: float, h: float, length: float, t: float, epsilon_r: float):
+def get_Stripline_Ind(
+    w: float, h: float, length: float, t: float, epsilon_r: float
+) -> float:
     """Calculate inductance of stripline trace.
 
     Derived consistently from Z0 and phase velocity: L = Z0 * length / v_p
@@ -763,7 +768,7 @@ def get_Stripline_Ind(w: float, h: float, length: float, t: float, epsilon_r: fl
     return Z0 * length / v_p
 
 
-def get_Plate_Cap(w: float, h: float, length: float, epsilon_r: float):
+def get_Plate_Cap(w: float, h: float, length: float, epsilon_r: float) -> float:
     """Calculate parallel plate capacitance.
 
     Args:
@@ -787,7 +792,7 @@ def get_Zone_Cap(
     epsilon_r1: float,
     h2: float = 0.0,
     epsilon_r2: float = 0.0,
-):
+) -> float:
     """Parallel-plate capacitance of a copper zone to one or two GND planes.
 
     One GND plane  (h2 <= 0):  C = eps0 * eps_r1 * A / h1
@@ -810,7 +815,7 @@ def get_Zone_Cap(
     return c
 
 
-def _elliptic_K_ratio(k: float):
+def _elliptic_K_ratio(k: float) -> float:
     """Approximate ratio K(k)/K'(k) of complete elliptic integrals.
 
     Args:
@@ -836,7 +841,7 @@ def _elliptic_K_ratio(k: float):
         return (1 / pi) * log(2 * (1 + sqrt(k)) / (1 - sqrt(k)))
 
 
-def get_Coplanar_Cap(w: float, gap: float, length: float, epsilon_r: float):
+def get_Coplanar_Cap(w: float, gap: float, length: float, epsilon_r: float) -> float:
     """Calculate capacitance of CPW (infinite substrate, t=0).
 
     Args:
@@ -861,7 +866,7 @@ def get_Coplanar_Cap(w: float, gap: float, length: float, epsilon_r: float):
     return C_per_length * length
 
 
-def get_Coplanar_Z0(w: float, gap: float, epsilon_r: float):
+def get_Coplanar_Z0(w: float, gap: float, epsilon_r: float) -> float:
     """Calculate characteristic impedance of CPW (infinite substrate, t=0).
 
     Args:
@@ -882,7 +887,7 @@ def get_Coplanar_Z0(w: float, gap: float, epsilon_r: float):
     return 30 * pi / (sqrt(eps_eff) * K_ratio)
 
 
-def get_Coplanar_Ind(w: float, gap: float, length: float, epsilon_r: float):
+def get_Coplanar_Ind(w: float, gap: float, length: float, epsilon_r: float) -> float:
     """Calculate inductance of coplanar waveguide (infinite substrate).
 
     Derived consistently from Z0 and phase velocity: L = Z0 * length / v_p
@@ -918,7 +923,7 @@ def analyze_coplanar(
     sigma: float = 5.8e7,
     mu_rc: float = 1.0,
     with_ground: bool = False,
-) -> dict:
+) -> dict[str, Any]:
     """Frequency-dependent analysis of coplanar waveguide (CPW).
 
     Supports both standard CPW (with_ground=False) and grounded CPW (with_ground=True).
@@ -1078,7 +1083,7 @@ def _validate_via(
     hole_diameter: float,
     plating_thickness: float,
     via_length: float,
-):
+) -> None:
     """Validate via parameters."""
     if hole_diameter <= 0:
         raise ValueError(f"hole_diameter must be > 0, got {hole_diameter}")
@@ -1093,7 +1098,7 @@ def get_Via_Resistance(
     plating_thickness: float,
     via_length: float,
     resistivity: float = 1.72e-8,
-):
+) -> float:
     """Calculate DC resistance of a plated via.
 
     Args:
@@ -1121,7 +1126,7 @@ def get_Via_Capacitance(
     pad_diameter: float,
     clearance_diameter: float,
     epsilon_r: float = 4.5,
-):
+) -> float:
     """Calculate parasitic capacitance of a via to surrounding copper.
 
     Args:
@@ -1157,7 +1162,7 @@ def get_Via_Capacitance(
 def get_Via_Inductance(
     hole_diameter: float,
     via_length: float,
-):
+) -> float:
     """Calculate parasitic inductance of a via.
 
     Args:
@@ -1184,7 +1189,7 @@ def get_Via_Parasitics(
     clearance_diameter: float | None = None,
     resistivity: float = 1.72e-8,
     epsilon_r: float = 4.5,
-):
+) -> dict[str, Any]:
     """Calculate all parasitic properties of a plated via.
 
     Args:

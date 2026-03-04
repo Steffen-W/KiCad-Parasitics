@@ -1,5 +1,6 @@
 import logging
 import re
+from typing import Any
 
 log = logging.getLogger(__name__)
 
@@ -13,9 +14,9 @@ term_regex = r"""(?mx)
        )"""
 
 
-def parse_sexp(sexp: str) -> list:
-    stack: list = []
-    out: list = []
+def parse_sexp(sexp: str) -> list[Any]:
+    stack: list[list[Any]] = []
+    out: list[Any] = []
     for termtypes in re.finditer(term_regex, sexp):
         term, value = [(t, v) for t, v in termtypes.groupdict().items() if v][0]
         log.debug("%-7s %-14s %-44r %-r", term, value, out, stack)
@@ -40,10 +41,11 @@ def parse_sexp(sexp: str) -> list:
             raise NotImplementedError(f"Error: {term!r}, {value!r}")
     if stack:
         raise ValueError("Unclosed bracket in S-expression")
-    return out[0]
+    result: list[Any] = out[0]
+    return result
 
 
-def print_sexp(exp: list | str | int | float) -> str:
+def print_sexp(exp: list[Any] | str | int | float) -> str:
     out = ""
     if isinstance(exp, list):
         out += "(" + " ".join(print_sexp(x) for x in exp) + ")"

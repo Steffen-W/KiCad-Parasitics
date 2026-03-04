@@ -13,7 +13,7 @@ from Get_PCB_Elements_IPC import _arc_geometry, _arc_points, _outline_from_midli
 from pcb_types import WIRE, VIA, PAD, TOP_LAYER, BOTTOM_LAYER
 
 
-Item = dict
+Item = dict[str, Any]
 NodeMap = dict[int, int]
 
 
@@ -125,7 +125,7 @@ def make_wire(
             "conn_end": [],
             "net_start": {layer: ns},
             "net_end": {layer: ne},
-            "_midline_pts": [(x1, y1), (x2, y2)],
+            "midline_pts": [(x1, y1), (x2, y2)],
             "_outline": [
                 (x1 + nx, y1 + ny),
                 (x2 + nx, y2 + ny),
@@ -178,7 +178,7 @@ def make_arc(
             "conn_end": [],
             "net_start": {layer: ns},
             "net_end": {layer: ne},
-            "_midline_pts": midline,
+            "midline_pts": midline,
             "_outline": _outline_from_midline(midline, width / 2),
         }
     )
@@ -308,7 +308,7 @@ class _CoilBuilder:
             item["start"], item["end"] = item["end"], item["start"]
             item["net_start"], item["net_end"] = item["net_end"], item["net_start"]
             item["conn_start"], item["conn_end"] = item["conn_end"], item["conn_start"]
-            item["_midline_pts"] = item["_midline_pts"][::-1]
+            item["midline_pts"] = item["midline_pts"][::-1]
             item["_outline"] = item["_outline"][::-1]
         self.items.reverse()
         self._start_pos, (self.px, self.py) = (self.px, self.py), self._start_pos
@@ -326,7 +326,7 @@ class _CoilBuilder:
             item["end"] = _flip(item["end"])
             if "mid" in item:
                 item["mid"] = _flip(item["mid"])
-            item["_midline_pts"] = [_flip(p) for p in item["_midline_pts"]]
+            item["midline_pts"] = [_flip(p) for p in item["midline_pts"]]
             item["_outline"] = [_flip(p) for p in item["_outline"]]
         self._start_pos = _flip(self._start_pos)
         self.px, self.py = _flip((self.px, self.py))
@@ -343,7 +343,7 @@ class _CoilBuilder:
             item["end"] = _flip(item["end"])
             if "mid" in item:
                 item["mid"] = _flip(item["mid"])
-            item["_midline_pts"] = [_flip(p) for p in item["_midline_pts"]]
+            item["midline_pts"] = [_flip(p) for p in item["midline_pts"]]
             item["_outline"] = [_flip(p) for p in item["_outline"]]
         self._start_pos = _flip(self._start_pos)
         self.px, self.py = _flip((self.px, self.py))
@@ -362,7 +362,7 @@ class _CoilBuilder:
             item["end"] = _shift(item["end"])
             if "mid" in item:
                 item["mid"] = _shift(item["mid"])
-            item["_midline_pts"] = [_shift(p) for p in item["_midline_pts"]]
+            item["midline_pts"] = [_shift(p) for p in item["midline_pts"]]
             item["_outline"] = [_shift(p) for p in item["_outline"]]
             if new_layer != self.layer:
                 old_ns = item["net_start"].pop(self.layer, None)

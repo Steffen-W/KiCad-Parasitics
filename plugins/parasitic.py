@@ -7,6 +7,7 @@ import traceback
 import math
 import json
 import logging
+from typing import Any
 import wx
 
 warnings.filterwarnings("ignore", message="pkg_resources is deprecated")
@@ -22,23 +23,81 @@ if venv:
 
 try:
     from .Connect_Nets import Connect_Nets
+    from .Get_Distance import find_all_reachable_nodes
     from .Get_Parasitic import extract_network, find_path, simulate_network
     from .network_display import format_network_info
+    from .pcb_types import CuLayer
 except ImportError:
     from Connect_Nets import Connect_Nets
+    from Get_Distance import find_all_reachable_nodes
     from Get_Parasitic import extract_network, find_path, simulate_network
     from network_display import format_network_info
+    from pcb_types import CuLayer
 
 log = logging.getLogger(__name__)
 
 
+def _build_path_error(
+    element1: dict[str, Any],
+    element2: dict[str, Any],
+    conn1: int,
+    conn2: int,
+    graph: dict[int, Any],
+    cu_stack: dict[int, CuLayer],
+) -> str:
+    """Diagnostic message explaining why no path was found between two nodes."""
+
+    def layer_names(elem: dict[str, Any]) -> str:
+        return ", ".join(
+            cu_stack[layer_id]["name"] if layer_id in cu_stack else str(layer_id)
+            for layer_id in elem.get("layer", [])
+        )
+
+    def elem_line(label: str, elem: dict[str, Any], conn: int) -> str:
+        in_graph = conn in graph
+        status = (
+            f"in graph ({len(graph.get(conn, {}))} neighbors)"
+            if in_graph
+            else "NOT in graph"
+        )
+        return f"  {label}: {elem.get('type', '?')}  net={elem.get('net_name', '?')!r}  layer={layer_names(elem)}  node={conn}  {status}"
+
+    in1, in2 = conn1 in graph, conn2 in graph
+    if not in1 and not in2:
+        reason = "Neither element is connected to any trace in the copper network."
+    elif not in1:
+        reason = "Element 1 has no connected traces in the copper network."
+    elif not in2:
+        reason = "Element 2 has no connected traces in the copper network."
+    else:
+        reachable = find_all_reachable_nodes(graph, conn1)
+        if conn2 in reachable:
+            reason = "Nodes are connected by BFS but path finding failed — check log."
+        else:
+            reason = (
+                f"Both nodes exist but are in separate copper islands "
+                f"(El.1 can reach {len(reachable)}/{len(graph)} nodes).\n"
+                f"Check for copper gaps or missing vias."
+            )
+
+    return "\n".join(
+        [
+            "No path found between selected elements.",
+            elem_line("El.1", element1, conn1),
+            elem_line("El.2", element2, conn2),
+            f"  Network: {len(graph)} nodes total",
+            reason,
+        ]
+    )
+
+
 def analyze_pcb_parasitic(
-    data: dict,
-    CuStack: dict,
-    element1: dict,
-    element2: dict,
+    data: dict[str, Any],
+    CuStack: dict[int, CuLayer],
+    element1: dict[str, Any],
+    element2: dict[str, Any],
     frequencies: list[float] | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """Analyze parasitic resistance/impedance between two PCB elements.
 
     Args:
@@ -51,7 +110,7 @@ def analyze_pcb_parasitic(
         dict with: resistance_dc, impedance_ac, distance, short_path_resistance,
                    area, network_info, graph, path, conn1, conn2, error
     """
-    result = {
+    result: dict[str, Any] = {
         "resistance_dc": None,
         "impedance_ac": {},
         "distance": float("inf"),
@@ -111,7 +170,9 @@ def analyze_pcb_parasitic(
     )
 
     if math.isinf(Distance):
-        result["error"] = "No path found between selected elements. Check connectivity."
+        result["error"] = _build_path_error(
+            element1, element2, conn1, conn2, network["graph"], CuStack
+        )
         log.error("%s", result["error"])
         return result
 
@@ -144,13 +205,15 @@ def analyze_pcb_parasitic(
 
 
 def format_result_message(
-    result: dict, CuStack: dict, net_tie_info: dict | None = None
+    result: dict[str, Any],
+    CuStack: dict[int, CuLayer],
+    net_tie_info: dict[str, Any] | None = None,
 ) -> str:
     """Format analysis result as human-readable message."""
     lines = []
 
     if result["error"]:
-        return result["error"]
+        return str(result["error"])
 
     if net_tie_info:
         lines.append("Net tie:")
@@ -265,9 +328,9 @@ class ResultDialog(wx.Dialog):
         self,
         parent: wx.Window | None,
         message: str,
-        debug_text: tuple | str | None = None,
-        analysis_result: dict | None = None,
-        cu_stack: dict | None = None,
+        debug_text: tuple[Any, ...] | str | None = None,
+        analysis_result: dict[str, Any] | None = None,
+        cu_stack: dict[int, CuLayer] | None = None,
     ) -> None:
         super().__init__(
             parent,
@@ -344,17 +407,18 @@ class ResultDialog(wx.Dialog):
 
     def _on_calc_inductance(self, _event: wx.CommandEvent) -> None:
         result = self.analysis_result
-        if not result:
+        cu_stack = self.cu_stack
+        if not result or cu_stack is None:
             return
         try:
             try:
                 from .calc_inductance import calc_path_inductance
             except ImportError:
                 from calc_inductance import calc_path_inductance
-            ind = calc_path_inductance(
+            ind: dict[str, Any] = calc_path_inductance(
                 result["path"],
                 result["network_info"],
-                self.cu_stack,
+                cu_stack,
             )
         except ImportError as e:
             ind = {
@@ -365,6 +429,9 @@ class ResultDialog(wx.Dialog):
                     f"  KiCad -> Settings -> Plugins -> Enable KiCad API"
                 )
             }
+        except Exception as e:
+            log.exception("Inductance calculation failed")
+            ind = {"message": f"ERROR: {e}"}
 
         dlg = wx.Dialog(
             self,
@@ -405,7 +472,9 @@ class ResultDialog(wx.Dialog):
         dlg.ShowModal()
         dlg.Destroy()
 
-    def _show_debug_plots(self, debug_data: dict, segments: list[dict]) -> None:
+    def _show_debug_plots(
+        self, debug_data: dict[str, Any], segments: list[dict[str, Any]]
+    ) -> None:
         try:
             try:
                 from .calc_inductance import show_debug_plots
@@ -416,12 +485,12 @@ class ResultDialog(wx.Dialog):
             pass
 
 
-def SaveDictToFile(data: dict, filename: str) -> None:
+def SaveDictToFile(data: dict[str, Any], filename: str) -> None:
     with open(filename, "w") as f:
         json.dump(data, f, indent=2, default=str)
 
 
-def run_plugin(ItemList: dict, CuStack: dict) -> None:
+def run_plugin(ItemList: dict[Any, Any], CuStack: dict[int, CuLayer]) -> None:
     try:
         plugin_path = os.path.dirname(os.path.abspath(__file__))
 

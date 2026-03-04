@@ -8,6 +8,13 @@
 
 Plugin to analyze the wires in the PCB editor. To use the plugin, two points must be marked on the board. This is best two pads that are connected with a wire. The tool then determines the DC resistance between the two points.
 
+## Development
+
+```bash
+mypy . --strict
+ruff check --fix --unsafe-fixes && ruff format
+```
+
 ## API Support
 
 - **pcbnew API** (KiCad 7–9): The classic scripting API, runs as a KiCad plugin inside the PCB editor.

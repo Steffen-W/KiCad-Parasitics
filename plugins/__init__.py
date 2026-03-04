@@ -32,7 +32,7 @@ for _logger_name in (
 
 
 class KiCadPluginParasitic(pcbnew.ActionPlugin):
-    def defaults(self):
+    def defaults(self) -> None:
         self.name = "Parasitics (pcbnew)"
         self.category = "Parasitics"
         self.description = "Parasitics (pcbnew)"
@@ -41,7 +41,7 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
         self.icon_file_name = os.path.join(self.plugin_path, "icon_small.png")
         self.dark_icon_file_name = os.path.join(self.plugin_path, "icon_small.png")
 
-    def Run(self):
+    def Run(self) -> None:
         board = pcbnew.GetBoard()
         connect = board.GetConnectivity()
         Settings = pcbnew.GetSettingsManager()

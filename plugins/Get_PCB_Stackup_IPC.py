@@ -5,9 +5,10 @@ from typing import Any
 from kipy.util.board_layer import canonical_name, is_copper_layer
 
 from Get_PCB_Stackup import extract_layer_from_string, Get_PCB_Stackup_fun
+from pcb_types import CuLayer, DielectricInfo
 
 
-def Get_PCB_Stackup_IPC(board: Any) -> dict[int, dict]:
+def Get_PCB_Stackup_IPC(board: Any) -> dict[int, CuLayer]:
     """Get CuStack via kipy IPC API.
 
     Returns the same dict format as Get_PCB_Stackup_fun().
@@ -58,7 +59,7 @@ def Get_PCB_Stackup_IPC(board: Any) -> dict[int, dict]:
             abs_height += entry["thickness"]
             continue
 
-        def _die(idx: int) -> dict | None:
+        def _die(idx: int) -> DielectricInfo | None:
             if 0 <= idx < len(flat) and flat[idx]["kind"] == "dielectric":
                 d = flat[idx]
                 return {
@@ -91,7 +92,8 @@ def Get_PCB_Stackup_IPC(board: Any) -> dict[int, dict]:
     if not CuStack:
         # Fallback: delegate to file-based parser
         board_file = board.document.board_filename
-        return Get_PCB_Stackup_fun(board_file, new_v9=True)
+        fallback: dict[int, CuLayer] = Get_PCB_Stackup_fun(board_file, new_v9=True)
+        return fallback
 
     return CuStack
 

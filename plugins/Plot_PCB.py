@@ -2,6 +2,7 @@
 
 import json
 import os
+from typing import Any
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle, Polygon
 from pcb_types import WIRE, VIA, PAD, ZONE
@@ -20,7 +21,9 @@ def _color(layers: list[int]) -> str:
     return "gray"
 
 
-def _collect_nodes(d: dict, pos_mm: tuple) -> dict[int, tuple]:
+def _collect_nodes(
+    d: dict[str, Any], pos_mm: tuple[Any, ...]
+) -> dict[int, tuple[Any, ...]]:
     """Extract node IDs from net_start/net_end and map to positions."""
     nodes = {}
     for layer in d.get("layer", []):
@@ -32,7 +35,7 @@ def _collect_nodes(d: dict, pos_mm: tuple) -> dict[int, tuple]:
     return nodes
 
 
-def plot_items(data: dict) -> None:
+def plot_items(data: dict[str, Any]) -> None:
     fig, ax = plt.subplots(figsize=(14, 14))
     node_positions = {}
 
@@ -51,7 +54,7 @@ def plot_items(data: dict) -> None:
                     Polygon(pts, closed=True, fc=color, ec=color, alpha=0.15, lw=0.3)
                 )
 
-            midline = d.get("_midline_pts")
+            midline = d.get("midline_pts")
             if midline and len(midline) >= 2:
                 ax.plot(
                     [p[0] * 1e3 for p in midline],

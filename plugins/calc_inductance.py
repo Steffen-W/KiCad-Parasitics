@@ -25,9 +25,9 @@ if TYPE_CHECKING:
     import wx
 
 try:
-    from .pcb_types import WIRE, VIA
+    from .pcb_types import WIRE, VIA, NetworkElement, CuLayer
 except ImportError:
-    from pcb_types import WIRE, VIA
+    from pcb_types import WIRE, VIA, NetworkElement, CuLayer
 
 log = logging.getLogger(__name__)
 
@@ -40,8 +40,8 @@ _MAX_MESH_FACES = 5000
 
 
 def calc_path_inductance(
-    path: list[int], network_info: list[dict], cu_stack: dict
-) -> dict:
+    path: list[int], network_info: list[NetworkElement], cu_stack: dict[int, CuLayer]
+) -> dict[str, Any]:
     """Calculate the inductance of a PCB trace path.
 
     Parameters
@@ -75,13 +75,13 @@ def calc_path_inductance(
 
 
 def _extract_segments(
-    path: list[int], network_info: list[dict], cu_stack: dict
-) -> list[dict]:
+    path: list[int], network_info: list[NetworkElement], cu_stack: dict[int, CuLayer]
+) -> list[dict[str, Any]]:
     """Extract physical geometry from path node sequence."""
-    node_to_elem = {}
-    for elem in network_info:
-        key = frozenset(elem["nodes"])
-        node_to_elem[key] = elem
+    node_to_elem: dict[frozenset[int], NetworkElement] = {}
+    for net_elem in network_info:
+        fkey = frozenset(net_elem["nodes"])
+        node_to_elem[fkey] = net_elem
 
     segments = []
     for i in range(len(path) - 1):
@@ -111,16 +111,24 @@ def _extract_segments(
                 "layer": layer_id,
                 "layer_name": elem.get("layer_name", "?"),
                 "z": z,
-                "thickness": cu_stack.get(layer_id, {}).get("thickness", 35e-6),
+                "thickness": cu_stack[layer_id]["thickness"]
+                if layer_id in cu_stack
+                else 35e-6,
             }
-            for key in ("mid", "radius", "angle", "_midline_pts"):
-                if key in elem:
-                    seg[key] = elem[key]
+            if "mid" in elem:
+                seg["mid"] = elem["mid"]
+            if "radius" in elem:
+                seg["radius"] = elem["radius"]
+            if "angle" in elem:
+                seg["angle"] = elem["angle"]
+            if "midline_pts" in elem:
+                seg["midline_pts"] = elem["midline_pts"]
             segments.append(seg)
 
         elif elem["type"] == VIA:
-            z1 = cu_stack.get(elem["layer1"], {}).get("abs_height", 0.0)
-            z2 = cu_stack.get(elem["layer2"], {}).get("abs_height", 0.0)
+            l1, l2 = elem["layer1"], elem["layer2"]
+            z1 = cu_stack[l1]["abs_height"] if l1 in cu_stack else 0.0
+            z2 = cu_stack[l2]["abs_height"] if l2 in cu_stack else 0.0
             segments.append(
                 {
                     "type": VIA,
@@ -168,13 +176,13 @@ def _make_plot_frame_class() -> type:
     return PlotFrame
 
 
-def _show_figure(fig: Any, title: str, parent: wx.Window | None) -> None:
+def _show_figure(fig: Any, title: str, parent: "wx.Window | None") -> None:
     """Display a Figure in a PlotFrame via wx.CallAfter (UI-thread safe)."""
     import wx
 
     PlotFrame = _make_plot_frame_class()
 
-    def _create():
+    def _create() -> None:
         frame = PlotFrame(parent, fig, title)
         frame.Show()
         frame.Raise()
@@ -183,7 +191,9 @@ def _show_figure(fig: Any, title: str, parent: wx.Window | None) -> None:
 
 
 def show_debug_plots(
-    debug_data: dict, segments: list[dict], parent: wx.Window | None = None
+    debug_data: dict[str, Any],
+    segments: list[dict[str, Any]],
+    parent: "wx.Window | None" = None,
 ) -> None:
     """Show interactive debug plots for centerline and mesh.
 
@@ -235,7 +245,7 @@ def show_debug_plots(
         color = layer_colors.get(layer_name, "gray")
         s = np.array(seg["start"]) * 1e3
         e = np.array(seg["end"]) * 1e3
-        midline = seg.get("_midline_pts")
+        midline = seg.get("midline_pts")
         if midline is not None and len(midline) > 2:
             pts_mm = [(p[0] * 1e3, p[1] * 1e3) for p in midline]
             xs, ys = zip(*pts_mm)
@@ -394,7 +404,7 @@ def show_debug_plots(
 # =========================================================================
 
 
-def _compute_inductance(segments: list[dict]) -> dict:
+def _compute_inductance(segments: list[dict[str, Any]]) -> dict[str, Any]:
     """Compute inductance from physical trace segments.
 
     1. Build ordered 3D centerline from segments
@@ -515,7 +525,7 @@ def _compute_inductance(segments: list[dict]) -> dict:
 
 
 def _build_centerline(
-    segments: list[dict],
+    segments: list[dict[str, Any]],
 ) -> tuple[list[tuple[float, float, float]], list[float]]:
     """Build ordered 3D centerline from path segments.
 
@@ -527,8 +537,8 @@ def _build_centerline(
     centerline : list of (x, y, z) tuples in meters (not yet closed)
     width_per_seg : list of widths (m), one per centerline segment
     """
-    centerline = []
-    width_per_seg = []
+    centerline: list[tuple[float, float, float]] = []
+    width_per_seg: list[float] = []
     last_width = 0.0
     current_z = None
 
@@ -610,7 +620,7 @@ def _build_centerline(
                 centerline.append((entry[0], entry[1], z))
                 width_per_seg.append(w)
 
-        midline = seg.get("_midline_pts")
+        midline = seg.get("midline_pts")
         if midline is not None and len(midline) > 2:
             # Reverse midline if traversal direction is opposite to stored order
             if seg["path_from"] != seg["node_at_start"]:
@@ -628,7 +638,9 @@ def _build_centerline(
     return centerline, width_per_seg
 
 
-def _neighbor_width(via_seg: dict, segments: list[dict], fallback: float) -> float:
+def _neighbor_width(
+    via_seg: dict[str, Any], segments: list[dict[str, Any]], fallback: float
+) -> float:
     """Get bridge width for a VIA from its neighboring WIRE segments."""
     idx = segments.index(via_seg)
     widths = []
@@ -642,7 +654,7 @@ def _neighbor_width(via_seg: dict, segments: list[dict], fallback: float) -> flo
         w = segments[idx + 1].get("width", 0.0)
         if w > 0:
             widths.append(w)
-    return min(widths) if widths else fallback
+    return float(min(widths)) if widths else fallback
 
 
 # =========================================================================
@@ -776,15 +788,15 @@ def _build_strip_mesh(
             faces.append([v00, v10, v01])
             faces.append([v01, v10, v11])
 
-    faces = np.array(faces)
-    n_faces = len(faces)
+    faces_arr = np.array(faces)
+    n_faces = len(faces_arr)
     log.debug("Strip mesh: %d vertices, %d faces", len(verts), n_faces)
 
-    mesh = trimesh.Trimesh(vertices=verts, faces=faces, process=False)
+    mesh = trimesh.Trimesh(vertices=verts, faces=faces_arr, process=False)
     return mesh
 
 
-def _build_stream_function(mesh: trimesh.Trimesh) -> np.ndarray:
+def _build_stream_function(mesh: trimesh.Trimesh) -> "np.ndarray[Any, Any]":
     """Stream function psi for a single-hole ring mesh.
 
     psi = 0 on outer boundary, 1 on inner boundary, interpolated for interior.
@@ -816,7 +828,7 @@ def _build_stream_function(mesh: trimesh.Trimesh) -> np.ndarray:
 # =========================================================================
 
 
-def _format_segments(segments: list[dict]) -> tuple[list[str], str, int]:
+def _format_segments(segments: list[dict[str, Any]]) -> tuple[list[str], str, int]:
     """Format segment info as human-readable lines."""
     lines = []
     total_wire_length = 0.0
@@ -942,8 +954,8 @@ if __name__ == "__main__":
     # F.Cu (z=0.01mm) -> via -> In1.Cu (z=0.8mm) -> via -> B.Cu (z=1.555mm)
     # Rectangular path: bottom on F.Cu, right on In1.Cu, top+left on B.Cu
     def wire(
-        s: tuple,
-        e: tuple,
+        s: tuple[float, ...],
+        e: tuple[float, ...],
         ns: int,
         ne: int,
         pf: int,
@@ -951,7 +963,7 @@ if __name__ == "__main__":
         w: float,
         layer_name: str,
         z: float,
-    ) -> dict:
+    ) -> dict[str, Any]:
         return {
             "type": WIRE,
             "start": s,
@@ -968,7 +980,9 @@ if __name__ == "__main__":
             "thickness": 35e-6,
         }
 
-    def via(pos: tuple, z_top: float, z_bot: float, l1: str, l2: str) -> dict:
+    def via(
+        pos: tuple[float, ...], z_top: float, z_bot: float, l1: str, l2: str
+    ) -> dict[str, Any]:
         return {
             "type": VIA,
             "position": pos,

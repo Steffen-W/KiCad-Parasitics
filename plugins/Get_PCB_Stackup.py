@@ -3,6 +3,11 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from .pcb_types import CuLayer, DielectricInfo
+except ImportError:
+    from pcb_types import CuLayer, DielectricInfo
+
+try:
     from .s_expression_parse import parse_sexp
 except ImportError:
     from s_expression_parse import parse_sexp
@@ -55,9 +60,9 @@ def Get_PCB_Stackup_fun(
     ProjectPath: str | Path = "./test.kicad_pcb",
     new_v9: bool = True,
     board_thickness: float | None = None,
-) -> dict[int, dict]:
+) -> dict[int, CuLayer]:
     layers = []
-    CuStack = {}
+    CuStack: dict[int, CuLayer] = {}
     parsed = None
     try:
         if exists(ProjectPath):
@@ -101,7 +106,7 @@ def Get_PCB_Stackup_fun(
                     if t <= 0:
                         raise Exception("Problematic layer thickness detected")
 
-                    def _die_info(idx: int) -> dict | None:
+                    def _die_info(idx: int) -> DielectricInfo | None:
                         if 0 <= idx < len(layers):
                             d = layers[idx]
                             if d["type"] in ("core", "prepreg"):
@@ -147,7 +152,7 @@ def Get_PCB_Stackup_fun(
             f"WARNING: No layer info found. Using 2-layer default: {total * 1000}mm, 35µm copper"
         )
         b_cu = 2 if new_v9 else 31
-        die = {"h": h_die, "epsilon_r": 4.3, "loss_tangent": 0.02}
+        die: DielectricInfo = {"h": h_die, "epsilon_r": 4.3, "loss_tangent": 0.02}
         CuStack[0] = {
             "thickness": t_cu,
             "name": "F.Cu",
