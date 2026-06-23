@@ -1,7 +1,20 @@
-kicad-python
-numpy
-matplotlib
-wxPython
-bfieldtools
-trimesh
-scipy
+# Minimum versions only. pip honors each package's requires-python, so on
+# Python 3.10 it auto-selects the newest 3.10-compatible release, and on 3.12+
+# it picks newer ones. The floors are the last versions verified working on
+# Python 3.10 -- note numpy>=2.3 / scipy>=1.16 would drop 3.10 support.
+#
+# Background: the numeric stack (numpy/scipy/trimesh/bfieldtools) is compiled
+# native code. A too-old / mismatched combination can segfault at import or
+# compute time with no Python traceback and no error dialog (symptom:
+# "Calc Inductance" gives no output). These floors avoid that.
+kicad-python>=0.7.1
+numpy>=2.2.6
+scipy>=1.15.3
+matplotlib>=3.10.9
+wxPython>=4.2.5
+trimesh>=4.12.2
+bfieldtools>=0.11.3
+
+# 50x faster trimesh cache hashing; otherwise it falls back to slow hashlib
+# (see the "falling back to hashlib hashing" log line).
+xxhash

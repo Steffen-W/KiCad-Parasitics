@@ -1,5 +1,6 @@
 __pycache__
 debug_*
+crash.log
 preversion
 *.zip
 .vscode

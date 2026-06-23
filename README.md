@@ -138,6 +138,7 @@ KiCad versions
 - [x] KiCad 7
 - [x] KiCad 8
 - [x] KiCad 9
+- [] KiCad 10
 
 # Feedback & Support
 

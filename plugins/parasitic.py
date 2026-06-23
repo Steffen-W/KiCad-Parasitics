@@ -7,10 +7,24 @@ import traceback
 import math
 import json
 import logging
+import faulthandler
 from typing import Any
 import wx
 
 warnings.filterwarnings("ignore", message="pkg_resources is deprecated")
+
+# Capture hard native crashes (segfaults in numpy/scipy/bfieldtools) that a
+# Python try/except cannot catch. Without this such a crash takes the process
+# down silently with no traceback ("no output" when pressing Calc Inductance).
+try:
+    _crash_log = open(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "crash.log"),
+        "a",
+        buffering=1,
+    )
+    faulthandler.enable(file=_crash_log, all_threads=True)
+except Exception:
+    faulthandler.enable(all_threads=True)
 
 venv = os.environ.get("VIRTUAL_ENV")
 if venv:
@@ -455,29 +469,14 @@ class ResultDialog(wx.Dialog):
         result = self.analysis_result
         cu_stack = self.cu_stack
         if not result or cu_stack is None:
-            return
-        try:
-            try:
-                from .calc_inductance import calc_path_inductance
-            except ImportError:
-                from calc_inductance import calc_path_inductance
-            ind: dict[str, Any] = calc_path_inductance(
-                result["path"],
-                result["network_info"],
-                cu_stack,
+            wx.MessageBox(
+                "No analysis result is available to compute inductance from.",
+                "Inductance Calculation",
+                wx.OK | wx.ICON_INFORMATION,
             )
-        except ImportError as e:
-            ind = {
-                "message": (
-                    f"ERROR: {e}\n\n"
-                    f"Use the KiCad IPC API which manages\n"
-                    f"dependencies automatically:\n"
-                    f"  KiCad -> Settings -> Plugins -> Enable KiCad API"
-                )
-            }
-        except Exception as e:
-            log.exception("Inductance calculation failed")
-            ind = {"message": f"ERROR: {e}"}
+            return
+
+        ind = self._compute_inductance(result, cu_stack)
 
         dlg = wx.Dialog(
             self,
@@ -488,7 +487,7 @@ class ResultDialog(wx.Dialog):
 
         text_ctrl = wx.TextCtrl(
             dlg,
-            value=ind["message"],
+            value=ind.get("message", "ERROR: calculation returned no message."),
             style=wx.TE_MULTILINE | wx.TE_READONLY | wx.HSCROLL,
         )
         font = wx.Font(
@@ -517,6 +516,79 @@ class ResultDialog(wx.Dialog):
         dlg.SetSize(wx.Size(600, 400))
         dlg.ShowModal()
         dlg.Destroy()
+
+    def _compute_inductance(
+        self, result: dict[str, Any], cu_stack: dict[int, CuLayer]
+    ) -> dict[str, Any]:
+        """Run calc_path_inductance with robust, user-visible error handling.
+
+        Always returns a dict containing a ``message`` key. The heavy numeric
+        work runs synchronously and blocks the GUI thread, so a busy cursor and
+        an info banner are shown to make clear the tool is working (not frozen).
+
+        Note: the dependencies (numpy/scipy/trimesh/bfieldtools) are only
+        installed in the venv managed by the KiCad IPC API. When the plugin is
+        run any other way they are typically missing, which surfaces here as an
+        ImportError -- hence the IPC-API hint in that message.
+        """
+        # --- import the calculator (a missing dependency lands here) ----------
+        try:
+            try:
+                from .calc_inductance import calc_path_inductance
+            except ImportError:
+                from calc_inductance import calc_path_inductance
+        except ImportError as e:
+            log.exception("Inductance dependency import failed")
+            missing = getattr(e, "name", None)
+            what = f"'{missing}'" if missing else str(e)
+            return {
+                "message": (
+                    f"ERROR: a required dependency could not be imported "
+                    f"({what}).\n\n"
+                    f"The inductance dependencies are installed automatically\n"
+                    f"only when the plugin runs via the KiCad IPC API, which\n"
+                    f"manages its own virtual environment:\n"
+                    f"    KiCad -> Settings -> Plugins -> Enable KiCad API\n\n"
+                    f"If you run the plugin outside that environment, install\n"
+                    f"the requirements into that interpreter yourself:\n"
+                    f"    pip install -r requirements.txt"
+                )
+            }
+
+        # --- run the calculation ---------------------------------------------
+        path = result.get("path") or []
+        log.info("Inductance calculation started (%d path nodes)", len(path))
+        try:
+            with wx.BusyCursor(), wx.BusyInfo(
+                "Calculating inductance...\n"
+                "This can take a while for large nets -- please wait."
+            ):
+                ind = calc_path_inductance(path, result["network_info"], cu_stack)
+        except MemoryError:
+            log.exception("Inductance calculation ran out of memory")
+            ind = {
+                "message": (
+                    "ERROR: ran out of memory while building the inductance\n"
+                    "matrix. The selected net is too large/dense for the\n"
+                    "available RAM."
+                )
+            }
+        except Exception as e:
+            log.exception("Inductance calculation failed")
+            log_dir = os.path.dirname(os.path.abspath(__file__))
+            ind = {
+                "message": (
+                    f"ERROR: {type(e).__name__}: {e}\n\n"
+                    f"See the log files for details, in:\n    {log_dir}\n"
+                    f"(debug_parasitic.log and crash.log)"
+                )
+            }
+        log.info("Inductance calculation finished")
+
+        if not isinstance(ind, dict) or "message" not in ind:
+            log.error("calc_path_inductance returned unexpected value: %r", ind)
+            return {"message": "ERROR: the calculation returned no result."}
+        return ind
 
     def _show_debug_plots(
         self, debug_data: dict[str, Any], segments: list[dict[str, Any]]
