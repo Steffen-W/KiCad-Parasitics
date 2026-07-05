@@ -290,13 +290,12 @@ def _run_spice(
     if rload_far is not None and not (math.isfinite(rload_far) and rload_far > 0):
         raise ValueError(f"rload_far must be finite and > 0, got {rload_far}")
 
-    with open(filename, "w") as f:
+    with open(filename, "w", encoding="utf-8") as f:
         f.write("* Parasitic Network\n")
         for idx, (kind, na, nb, val) in enumerate(elements, 1):
             if not math.isfinite(val):
                 raise ValueError(
-                    f"Non-finite value in SPICE element {kind}{idx} "
-                    f"({na}->{nb}): {val}"
+                    f"Non-finite value in SPICE element {kind}{idx} ({na}->{nb}): {val}"
                 )
             f.write(f"{kind}{idx} {na} {nb} {val:.15f}\n")
         # Port excitation between conn1 and conn2.
@@ -326,7 +325,7 @@ def _run_spice(
         "[SPICE] %s: %d elements, conn %s <-> %s", mode, len(elements), conn1, conn2
     )
     if log.isEnabledFor(logging.DEBUG):
-        with open(filename) as _f:
+        with open(filename, encoding="utf-8") as _f:
             log.debug("[SPICE] netlist:\n%s", _f.read())
 
     _run_native_spice_call(ngspyce.source, filename)

@@ -15,6 +15,7 @@ if os.environ.get("PARASITIC_DEBUG"):
             os.path.dirname(os.path.abspath(__file__)), "debug_parasitic.log"
         ),
         filemode="w",
+        encoding="utf-8",
     )
 
 for _logger_name in (

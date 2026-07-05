@@ -4,8 +4,12 @@ from typing import Any
 
 from kipy.util.board_layer import canonical_name, is_copper_layer
 
-from Get_PCB_Stackup import extract_layer_from_string, Get_PCB_Stackup_fun
-from pcb_types import CuLayer, DielectricInfo
+try:
+    from .Get_PCB_Stackup import extract_layer_from_string, Get_PCB_Stackup_fun
+    from .pcb_types import CuLayer, DielectricInfo
+except ImportError:
+    from Get_PCB_Stackup import extract_layer_from_string, Get_PCB_Stackup_fun
+    from pcb_types import CuLayer, DielectricInfo
 
 
 def Get_PCB_Stackup_IPC(board: Any) -> dict[int, CuLayer]:
@@ -52,7 +56,7 @@ def Get_PCB_Stackup_IPC(board: Any) -> dict[int, CuLayer]:
             )
 
     # Build CuStack from flat list
-    CuStack = {}
+    CuStack: dict[int, CuLayer] = {}
     abs_height = 0.0
     for i, entry in enumerate(flat):
         if entry["kind"] == "dielectric":

@@ -155,18 +155,29 @@ def render_network_ascii(
     if len(path) < 2:
         return "Path too short"
 
-    res_lookup = {}
+    res_lookup: dict[tuple[int, int], list[NetworkElement]] = {}
     for info in network_info:
         n1, n2 = info["nodes"]
-        res_lookup[(min(n1, n2), max(n1, n2))] = info
+        res_lookup.setdefault((min(n1, n2), max(n1, n2)), []).append(info)
 
     def get_res(a: int, b: int) -> float:
         key = (min(a, b), max(a, b))
-        return float(res_lookup[key]["resistance"]) if key in res_lookup else 0.0
+        elems = res_lookup.get(key)
+        if not elems:
+            return 0.0
+        # Multiple elements between the same node pair are electrically
+        # parallel; combine them the same way the simulation does.
+        conductance = sum(1.0 / e["resistance"] for e in elems if e["resistance"] > 0)
+        return 1.0 / conductance if conductance > 0 else 0.0
 
     def get_type(a: int, b: int) -> str:
         key = (min(a, b), max(a, b))
-        return str(res_lookup[key]["type"][0]) if key in res_lookup else "?"
+        elems = res_lookup.get(key)
+        if not elems:
+            return "?"
+        if len(elems) > 1:
+            return "="  # multiple parallel elements between these nodes
+        return str(elems[0]["type"][0])
 
     # Simplify graph before path search
     sgraph, chain_map = simplify_graph(graph, path[0], path[-1])

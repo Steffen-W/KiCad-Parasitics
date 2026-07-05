@@ -56,49 +56,49 @@ def search_recursive(line: Any, entry: str, all: bool = False) -> Any:
     return None
 
 
+def _parse_stackup_layers(parsed: Any, new_v9: bool) -> list[dict[str, Any]]:
+    """Extract the flat list of stackup layer dicts from a parsed .kicad_pcb tree."""
+    setup = search_recursive(parsed, "setup", all=True)
+    if not setup:
+        return []
+
+    stackup = search_recursive(setup, "stackup", all=True)
+    if not stackup:
+        return []
+
+    layers = []
+    abs_height = 0.0
+    for layer in stackup:
+        tmp = {}
+        tmp["layer"] = search_recursive(layer, "layer")
+        tmp["thickness"] = search_recursive(layer, "thickness")
+        tmp["epsilon_r"] = search_recursive(layer, "epsilon_r")
+        tmp["loss_tangent"] = search_recursive(layer, "loss_tangent")
+        tmp["type"] = search_recursive(layer, "type")
+
+        if tmp["thickness"] is not None:
+            if new_v9:
+                tmp["cu_layer"] = extract_layer_from_string(tmp["layer"])
+            else:
+                tmp["cu_layer"] = extract_layer_from_string_old(tmp["layer"])
+            tmp["abs_height"] = abs_height
+            abs_height += float(tmp["thickness"])
+            layers.append(tmp)
+    return layers
+
+
 def Get_PCB_Stackup_fun(
-    ProjectPath: str | Path = "./test.kicad_pcb",
+    ProjectPath: str | Path,
     new_v9: bool = True,
     board_thickness: float | None = None,
 ) -> dict[int, CuLayer]:
-    layers = []
     CuStack: dict[int, CuLayer] = {}
-    parsed = None
     try:
         if exists(ProjectPath):
-            with open(ProjectPath, "r") as f:
+            with open(ProjectPath, "r", encoding="utf-8") as f:
                 txt = f.read()
             parsed = parse_sexp(txt)
-
-            while True:
-                setup = search_recursive(parsed, "setup", all=True)
-                if not setup:
-                    break
-
-                stackup = search_recursive(setup, "stackup", all=True)
-                if not stackup:
-                    break
-
-                abs_height = 0.0
-                for layer in stackup:
-                    tmp = {}
-                    tmp["layer"] = search_recursive(layer, "layer")
-                    tmp["thickness"] = search_recursive(layer, "thickness")
-                    tmp["epsilon_r"] = search_recursive(layer, "epsilon_r")
-                    tmp["loss_tangent"] = search_recursive(layer, "loss_tangent")
-                    tmp["type"] = search_recursive(layer, "type")
-
-                    if tmp["thickness"] is not None:
-                        if new_v9:
-                            tmp["cu_layer"] = extract_layer_from_string(tmp["layer"])
-                        else:
-                            tmp["cu_layer"] = extract_layer_from_string_old(
-                                tmp["layer"]
-                            )
-                        tmp["abs_height"] = abs_height
-                        abs_height += float(tmp["thickness"])
-                        layers.append(tmp)
-                break
+            layers = _parse_stackup_layers(parsed, new_v9)
 
             for i, Layer in enumerate(layers):
                 if Layer["cu_layer"] is not None:

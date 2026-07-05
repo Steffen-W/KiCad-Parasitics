@@ -1,5 +1,4 @@
 import os
-import os.path
 import re
 import sys
 import warnings
@@ -21,6 +20,7 @@ try:
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "crash.log"),
         "a",
         buffering=1,
+        encoding="utf-8",
     )
     faulthandler.enable(file=_crash_log, all_threads=True)
 except Exception:
@@ -37,15 +37,23 @@ if venv:
 
 try:
     from .Connect_Nets import Connect_Nets
-    from .Get_Distance import find_all_reachable_nodes
-    from .Get_Parasitic import extract_network, find_path, simulate_network
-    from .network_display import format_network_info
-    from .pcb_types import CuLayer
 except ImportError:
     from Connect_Nets import Connect_Nets
+try:
+    from .Get_Distance import find_all_reachable_nodes
+except ImportError:
     from Get_Distance import find_all_reachable_nodes
+try:
+    from .Get_Parasitic import extract_network, find_path, simulate_network
+except ImportError:
     from Get_Parasitic import extract_network, find_path, simulate_network
+try:
+    from .network_display import format_network_info
+except ImportError:
     from network_display import format_network_info
+try:
+    from .pcb_types import CuLayer
+except ImportError:
     from pcb_types import CuLayer
 
 log = logging.getLogger(__name__)
@@ -559,9 +567,12 @@ class ResultDialog(wx.Dialog):
         path = result.get("path") or []
         log.info("Inductance calculation started (%d path nodes)", len(path))
         try:
-            with wx.BusyCursor(), wx.BusyInfo(
-                "Calculating inductance...\n"
-                "This can take a while for large nets -- please wait."
+            with (
+                wx.BusyCursor(),
+                wx.BusyInfo(
+                    "Calculating inductance...\n"
+                    "This can take a while for large nets -- please wait."
+                ),
             ):
                 ind = calc_path_inductance(path, result["network_info"], cu_stack)
         except MemoryError:
@@ -595,24 +606,31 @@ class ResultDialog(wx.Dialog):
     ) -> None:
         try:
             try:
-                from .calc_inductance import show_debug_plots
+                from .inductance_plots import show_debug_plots
             except ImportError:
-                from calc_inductance import show_debug_plots
+                from inductance_plots import show_debug_plots
             show_debug_plots(debug_data, segments, parent=None)
-        except Exception:
-            pass
+        except Exception as e:
+            log.exception("Debug Plots failed")
+            wx.MessageBox(
+                f"ERROR: could not show debug plots.\n\n{type(e).__name__}: {e}",
+                "Debug Plots",
+                wx.OK | wx.ICON_ERROR,
+            )
 
 
 def SaveDictToFile(data: dict[str, Any], filename: str) -> None:
-    with open(filename, "w") as f:
+    with open(filename, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, default=str)
 
 
-def run_plugin(ItemList: dict[Any, Any], CuStack: dict[int, CuLayer]) -> None:
+def run_plugin(
+    ItemList: dict[Any, Any],
+    CuStack: dict[int, CuLayer],
+    net_tie_info: dict[str, Any] | None = None,
+) -> None:
     try:
         plugin_path = os.path.dirname(os.path.abspath(__file__))
-
-        net_tie_info = ItemList.pop("_net_tie_info", None)
 
         log.info("Found %d PCB elements", len(ItemList))
 
@@ -645,7 +663,9 @@ def run_plugin(ItemList: dict[Any, Any], CuStack: dict[int, CuLayer]) -> None:
             if result["network_info"] and log.isEnabledFor(logging.INFO):
                 try:
                     with open(
-                        os.path.join(plugin_path, "debug_network_info.json"), "w"
+                        os.path.join(plugin_path, "debug_network_info.json"),
+                        "w",
+                        encoding="utf-8",
                     ) as f:
                         cleaned = [
                             {k: v for k, v in e.items() if k != "hf"}
@@ -703,6 +723,7 @@ if __name__ == "__main__":
             os.path.dirname(os.path.abspath(__file__)), "debug_parasitic.log"
         ),
         filemode="w",
+        encoding="utf-8",
     )
     # Suppress noisy third-party debug output
     for _logger_name in (
@@ -736,11 +757,11 @@ if __name__ == "__main__":
         from Get_PCB_Elements_IPC import Get_PCB_Elements_IPC
         from Get_PCB_Stackup_IPC import Get_PCB_Stackup_IPC
 
-        ItemList = Get_PCB_Elements_IPC(board)
+        ItemList, net_tie_info = Get_PCB_Elements_IPC(board)
         logging.debug("Got %d elements from IPC API", len(ItemList))
 
         CuStack = Get_PCB_Stackup_IPC(board)
-        run_plugin(ItemList, CuStack)
+        run_plugin(ItemList, CuStack, net_tie_info)
         # Keep event loop alive for any open PlotFrame windows
         app.MainLoop()
     except errors.ConnectionError:

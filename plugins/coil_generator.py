@@ -41,11 +41,6 @@ class _IdContext:
         return n
 
 
-# Module-level default context used when no explicit context is passed.
-# Call new_context() to get a fresh, isolated context instead.
-_default_ctx = _IdContext()
-
-
 def new_context() -> _IdContext:
     """Return a fresh ID/node context for an independent generation run."""
     return _IdContext()
@@ -67,10 +62,16 @@ def make_pad(
     width: float = 0.0002,
     layer: int = 0,
     name: str = "",
+    *,
     ctx: _IdContext | None = None,
 ) -> tuple[Item, int]:
-    """Create a PAD at *pos*."""
-    ctx = ctx or _default_ctx
+    """Create a PAD at *pos*.
+
+    ctx defaults to a fresh, throwaway context when omitted -- fine for
+    one-off/interactive use, but pass a shared ctx when chaining IDs/nodes
+    across multiple make_*/generate_* calls.
+    """
+    ctx = ctx if ctx is not None else new_context()
     x, y = pos
     node = ctx.new_node()
     r = width / 2
@@ -103,10 +104,16 @@ def make_wire(
     layer: int = 0,
     node_start: int | None = None,
     node_end: int | None = None,
+    *,
     ctx: _IdContext | None = None,
 ) -> tuple[Item, int, int]:
-    """Create a straight WIRE."""
-    ctx = ctx or _default_ctx
+    """Create a straight WIRE.
+
+    ctx defaults to a fresh, throwaway context when omitted -- fine for
+    one-off/interactive use, but pass a shared ctx when chaining IDs/nodes
+    across multiple make_*/generate_* calls.
+    """
+    ctx = ctx if ctx is not None else new_context()
     ns = node_start if node_start is not None else ctx.new_node()
     ne = node_end if node_end is not None else ctx.new_node()
     dx, dy = x2 - x1, y2 - y1
@@ -148,10 +155,16 @@ def make_arc(
     layer: int = 0,
     node_start: int | None = None,
     node_end: int | None = None,
+    *,
     ctx: _IdContext | None = None,
 ) -> tuple[Item, int, int]:
-    """Create an arc WIRE via three points."""
-    ctx = ctx or _default_ctx
+    """Create an arc WIRE via three points.
+
+    ctx defaults to a fresh, throwaway context when omitted -- fine for
+    one-off/interactive use, but pass a shared ctx when chaining IDs/nodes
+    across multiple make_*/generate_* calls.
+    """
+    ctx = ctx if ctx is not None else new_context()
     start, end, mid = (x_start, y_start), (x_end, y_end), (x_mid, y_mid)
     r_m, angle, arc_length, center, arc_sa = _arc_geometry(start, end, mid)
 
@@ -190,10 +203,16 @@ def make_via(
     y: float,
     drill: float = 0.0003,
     layers: list[int] | None = None,
+    *,
     ctx: _IdContext | None = None,
 ) -> tuple[Item, NodeMap]:
-    """Create a VIA at (*x*, *y*)."""
-    ctx = ctx or _default_ctx
+    """Create a VIA at (*x*, *y*).
+
+    ctx defaults to a fresh, throwaway context when omitted -- fine for
+    one-off/interactive use, but pass a shared ctx when chaining IDs/nodes
+    across multiple make_*/generate_* calls.
+    """
+    ctx = ctx if ctx is not None else new_context()
     if layers is None:
         layers = [TOP_LAYER, BOTTOM_LAYER]
     nodes: NodeMap = {}
@@ -224,7 +243,7 @@ def save_json(items: list[Item], path: str | None = None) -> str:
     if path is None:
         path = os.path.join(os.path.dirname(__file__), "debug_ItemList.json")
     d = items_to_dict(items)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(d, f, indent=2)
     print(f"Saved {len(d)} items to {path}")
     return path
@@ -246,9 +265,10 @@ class _CoilBuilder:
         width: float,
         layer: int,
         node_start: int | None = None,
+        *,
         ctx: _IdContext | None = None,
     ) -> None:
-        self._ctx = ctx or _default_ctx
+        self._ctx = ctx if ctx is not None else new_context()
         self.items: list[Item] = []
         self.width = width
         self.layer = layer
@@ -414,6 +434,7 @@ def generate_circular_coil(
     inner_radius: float = 0.001,
     spacing: float = 0.0003,
     width: float = 0.0002,
+    *,
     ctx: _IdContext | None = None,
 ) -> _CoilBuilder:
     """Circular spiral at origin from 90-degree arcs (4 per turn)."""
@@ -441,6 +462,7 @@ def generate_square_coil(
     inner_size: float = 0.002,
     spacing: float = 0.0003,
     width: float = 0.0002,
+    *,
     ctx: _IdContext | None = None,
 ) -> _CoilBuilder:
     """Square spiral (delegates to rectangular with equal sides)."""
@@ -460,6 +482,7 @@ def generate_rectangular_coil(
     inner_height: float = 0.001,
     spacing: float = 0.0003,
     width: float = 0.0002,
+    *,
     ctx: _IdContext | None = None,
 ) -> _CoilBuilder:
     """Rectangular spiral at origin, strictly horizontal/vertical edges."""
@@ -487,6 +510,7 @@ def generate_rounded_rectangular_coil(
     corner_radius: float = 0.0003,
     spacing: float = 0.0003,
     width: float = 0.0002,
+    *,
     ctx: _IdContext | None = None,
 ) -> _CoilBuilder:
     """Rectangular spiral at origin with rounded corners (90-degree arcs)."""
@@ -540,6 +564,7 @@ def generate_polygon_coil(
     spacing: float = 0.0003,
     width: float = 0.0002,
     sides: int = 6,
+    *,
     ctx: _IdContext | None = None,
 ) -> _CoilBuilder:
     """Regular polygon spiral at origin with constant edge-to-edge spacing."""
@@ -572,6 +597,7 @@ def generate_elliptical_coil(
     inner_ry: float = 0.0006,
     spacing: float = 0.0003,
     width: float = 0.0002,
+    *,
     ctx: _IdContext | None = None,
 ) -> _CoilBuilder:
     """Elliptical spiral at origin from 90-degree arcs, constant aspect ratio."""

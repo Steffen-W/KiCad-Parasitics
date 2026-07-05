@@ -14,7 +14,7 @@ def dijkstra(
     while queue:
         current_distance, current_node = heapq.heappop(queue)
 
-        for neighbor, weight in graph[current_node].items():
+        for neighbor, weight in graph.get(current_node, {}).items():
             new_distance = current_distance + weight
             if new_distance < distance[neighbor]:
                 distance[neighbor] = new_distance

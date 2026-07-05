@@ -1,7 +1,7 @@
 import logging
 import numpy as np
 import pcbnew
-from typing import Any, Iterable, overload, Sequence, Union
+from typing import AbstractSet, Any, Iterable, overload, Sequence, Union
 
 try:
     from .pcb_types import WIRE, VIA, PAD, ZONE
@@ -26,7 +26,7 @@ def ToM(value: Any) -> Any:
 
 
 def SaveDictToFile(dict_name: dict[Any, Any], filename: str) -> None:
-    with open(filename, "w") as f:
+    with open(filename, "w", encoding="utf-8") as f:
         f.write("data = {\n")
         for uuid, d in list(dict_name.items()):
             f.write(str(uuid))
@@ -85,7 +85,13 @@ def getPolygon(obj: pcbnew.PAD, layer: int) -> list[tuple[float, ...]]:
     return Polygon
 
 
-def getLayer(obj: pcbnew.BOARD_ITEM, PossibleLayer: set[int] = {0, 31}) -> list[int]:
+_DEFAULT_POSSIBLE_LAYERS: frozenset[int] = frozenset({0, 31})
+
+
+def getLayer(
+    obj: pcbnew.BOARD_ITEM,
+    PossibleLayer: AbstractSet[int] = _DEFAULT_POSSIBLE_LAYERS,
+) -> list[int]:
     return sorted(set(obj.GetLayerSet().CuStack()) & PossibleLayer)
 
 
@@ -235,7 +241,7 @@ def Get_PCB_Elements(
             #     temp["FootprintReference"] = Pad.GetParent().GetReference()
 
         elif type(item) is pcbnew.ZONE:
-            if "teardrop" in item.GetZoneName():  # skip teardrop zones
+            if "teardrop" in item.GetZoneName().lower():  # skip teardrop zones
                 continue
             temp["type"] = ZONE
             temp["position"] = ToM(item.GetPosition())
@@ -244,11 +250,6 @@ def Get_PCB_Elements(
             temp["ZoneName"] = item.GetZoneName()
         elif type(item) is pcbnew.PCB_TRACK:
             continue  # already in board.GetTracks()
-        elif type(item) is pcbnew.BOARD_CONNECTED_ITEM:
-            if item.GetNetCode() == 0:
-                continue
-            log.warning("Unhandled item type: %s", type(item))
-            continue
         else:
             log.warning("Unhandled item type: %s", type(item))
             continue

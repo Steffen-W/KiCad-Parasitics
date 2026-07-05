@@ -12,8 +12,12 @@ from kipy.board import Board
 from kipy.board_types import ArcTrack, FootprintInstance
 from kipy.util.board_layer import canonical_name, is_copper_layer
 
-from Get_PCB_Stackup import extract_layer_from_string
-from pcb_types import WIRE, VIA, PAD, ZONE
+try:
+    from .Get_PCB_Stackup import extract_layer_from_string
+    from .pcb_types import WIRE, VIA, PAD, ZONE
+except ImportError:
+    from Get_PCB_Stackup import extract_layer_from_string
+    from pcb_types import WIRE, VIA, PAD, ZONE
 
 log = logging.getLogger(__name__)
 
@@ -186,7 +190,7 @@ def _expand_nets_via_net_ties(board: Board, initial_nets: Any) -> Any:
     # Build net-tie index once: list of (fp, group_nets)
     net_tie_index = []
     for fp in board.get_footprints():
-        net_ties = fp.definition._proto.net_ties
+        net_ties = fp.definition.proto.net_ties
         if len(net_ties) == 0:
             continue
         pad_net_map = {p.number: p.net.name for p in fp.definition.pads}
@@ -308,24 +312,29 @@ def _collect_footprint_shapes(
                 "conn_end": [],
                 "midline_pts": [start, end],
             }
+            midline_pts: list[tuple[float, float]] = [start, end]
             if r_m is not None:
                 item["radius"] = r_m
                 if center is not None:
                     assert arc_sa is not None
-                    item["midline_pts"] = [start] + _arc_points(
+                    midline_pts = [start] + _arc_points(
                         center, r_m, arc_sa, angle, width
                     )
-            item["_outline"] = _outline_from_midline(item["midline_pts"], width / 2)
+            item["midline_pts"] = midline_pts
+            item["_outline"] = _outline_from_midline(midline_pts, width / 2)
             items[oid] = item
 
     return items
 
 
-def Get_PCB_Elements_IPC(board: Board) -> dict[Any, Any]:
+def Get_PCB_Elements_IPC(
+    board: Board,
+) -> tuple[dict[Any, Any], dict[str, Any] | None]:
     """Collect all tracks/vias/pads/zones from the board via IPC API.
 
-    Returns ItemList in the same dict format as
-    Get_PCB_Elements.Get_PCB_Elements().
+    Returns (ItemList, net_tie_info); ItemList uses the same dict format as
+    Get_PCB_Elements.Get_PCB_Elements(). net_tie_info is None unless the
+    selection was expanded through Net Tie footprints.
     """
     selection_ids = {item.id.value for item in board.get_selection()}
     log.info("Selection: %d items", len(selection_ids))
@@ -349,7 +358,7 @@ def Get_PCB_Elements_IPC(board: Board) -> dict[Any, Any]:
     if len(selection) != 2:
         log.warning("Expected 2 selected items, got %d", len(selection))
         print(f"Error: Please select exactly 2 elements (selected: {len(selection)})")
-        return {}
+        return {}, None
 
     # Expand nets transitively through Net Tie footprints
     target_nets, net_tie_fps = _expand_nets_via_net_ties(board, nets)
@@ -358,7 +367,7 @@ def Get_PCB_Elements_IPC(board: Board) -> dict[Any, Any]:
         # Multiple nets selected but no net-tie bridges them
         log.warning("Selected items belong to different nets: %s", nets)
         print(f"Error: Selected items must belong to the same net (found: {nets})")
-        return {}
+        return {}, None
 
     log.info("Target nets: %s", target_nets)
 
@@ -528,7 +537,7 @@ def Get_PCB_Elements_IPC(board: Board) -> dict[Any, Any]:
             continue
         if zone.net.name not in target_nets:
             continue
-        if "teardrop" in (zone.name or ""):
+        if "teardrop" in (zone.name or "").lower():
             continue
 
         oid = _obj_id(zone)
@@ -578,18 +587,19 @@ def Get_PCB_Elements_IPC(board: Board) -> dict[Any, Any]:
     # --- Build connectivity from coordinates ---
     _build_connectivity(ItemList)
 
-    # Store net-tie metadata (after _build_connectivity to avoid interfering)
+    # Build net-tie metadata (after _build_connectivity to avoid interfering)
+    net_tie_info = None
     if net_tie_fps:
         refs = [
             fp.reference_field.text.value if fp.reference_field else "?"
             for fp in net_tie_fps
         ]
-        ItemList["_net_tie_info"] = {
+        net_tie_info = {
             "refs": refs,
             "nets": sorted(target_nets),
         }
 
-    return ItemList
+    return ItemList, net_tie_info
 
 
 def _point_in_polygon(

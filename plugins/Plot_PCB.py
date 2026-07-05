@@ -171,7 +171,7 @@ if __name__ == "__main__":
             f"debug_ItemList.json not found at {DATA_FILE}\n"
             "Run the plugin once to generate it, or set PARASITIC_DEBUG=1."
         )
-    with open(DATA_FILE) as f:
+    with open(DATA_FILE, encoding="utf-8") as f:
         data = json.load(f)
     data = {k: v for k, v in data.items() if isinstance(v, dict) and "type" in v}
     print(f"Loaded {len(data)} elements from {DATA_FILE}")

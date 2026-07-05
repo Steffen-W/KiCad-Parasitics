@@ -153,6 +153,9 @@ def Connect_Nets(data: dict[Any, dict[str, Any]]) -> dict[Any, dict[str, Any]]:
 
         # Process netEnd connections
         for uuid, d in data.items():
+            if d.get("type") == ZONE:  # handled in Get_Parasitic
+                continue
+
             for layer in d["layer"]:
                 if d["net_end"].get(layer, NOT_ASSIGNED) > NOT_ASSIGNED:
                     continue
