@@ -2,8 +2,15 @@ import logging
 import math
 import os
 import tempfile
+import threading
 from typing import Any, NamedTuple
 import numpy as np
+
+# Wall-clock budget for a single native ngspice call. ngspice runs in-process
+# via ctypes, so a hung/non-convergent call cannot be killed from Python --
+# the timeout only stops us from waiting on the GUI thread forever; the
+# native call itself keeps running in its (daemon) thread in the background.
+SPICE_TIMEOUT_S = 30.0
 
 
 class Resistor(NamedTuple):
@@ -193,6 +200,39 @@ def analyze_trace(
     }
 
 
+class SpiceTimeoutError(RuntimeError):
+    """Raised when a native ngspice call exceeds SPICE_TIMEOUT_S."""
+
+
+def _run_native_spice_call(fn: Any, *args: Any) -> None:
+    """Run a native ngspyce call with a wall-clock timeout.
+
+    ngspice is a ctypes-bound native library running in-process, so a
+    non-convergent or pathological circuit can block indefinitely. A daemon
+    thread lets us stop *waiting* on timeout without freezing the caller
+    (typically the GUI thread) forever; the native call itself cannot be
+    force-killed and may keep running in the background until it returns.
+    """
+    error: list[BaseException] = []
+
+    def _target() -> None:
+        try:
+            fn(*args)
+        except BaseException as e:  # noqa: BLE001 - re-raised in caller thread
+            error.append(e)
+
+    thread = threading.Thread(target=_target, daemon=True)
+    thread.start()
+    thread.join(SPICE_TIMEOUT_S)
+    if thread.is_alive():
+        raise SpiceTimeoutError(
+            f"ngspice call did not return within {SPICE_TIMEOUT_S:.0f}s "
+            "(likely non-convergent or pathological circuit)"
+        )
+    if error:
+        raise error[0]
+
+
 def _run_spice(
     filename: str,
     elements: list[SpiceElement],
@@ -247,9 +287,17 @@ def _run_spice(
         For AC: complex impedance in Ohm (complex)
         On error: -1
     """
+    if rload_far is not None and not (math.isfinite(rload_far) and rload_far > 0):
+        raise ValueError(f"rload_far must be finite and > 0, got {rload_far}")
+
     with open(filename, "w") as f:
         f.write("* Parasitic Network\n")
         for idx, (kind, na, nb, val) in enumerate(elements, 1):
+            if not math.isfinite(val):
+                raise ValueError(
+                    f"Non-finite value in SPICE element {kind}{idx} "
+                    f"({na}->{nb}): {val}"
+                )
             f.write(f"{kind}{idx} {na} {nb} {val:.15f}\n")
         # Port excitation between conn1 and conn2.
         # Vmeas (0 V) measures the port current; V1 drives conn1–conn2 = 1 V.
@@ -281,11 +329,11 @@ def _run_spice(
         with open(filename) as _f:
             log.debug("[SPICE] netlist:\n%s", _f.read())
 
-    ngspyce.source(filename)
+    _run_native_spice_call(ngspyce.source, filename)
     if ac_freq:
-        ngspyce.cmd("run")
+        _run_native_spice_call(ngspyce.cmd, "run")
     else:
-        ngspyce.dc("v1", 1, 1, 1)
+        _run_native_spice_call(ngspyce.dc, "v1", 1, 1, 1)
     os.remove(filename)
 
     log.info("[SPICE] done")
@@ -342,7 +390,11 @@ def RunSimulation(
     dc_elements: list[SpiceElement] = [
         ("R", r.node1, r.node2, r.resistance) for r in resistors
     ]
-    r_dc = _run_spice(filename, dc_elements, conn1, conn2)
+    try:
+        r_dc = _run_spice(filename, dc_elements, conn1, conn2)
+    except Exception:
+        log.exception("[SPICE] DC simulation failed")
+        r_dc = -1.0
 
     # --- AC: RLC network per frequency ---
     z_ac: dict[float, float | complex] = {}
@@ -404,27 +456,39 @@ def RunSimulation(
                 R = elem["resistance"]
                 ac.append(("R", n1, n2, R))
 
-        z_ac[freq] = _run_spice(filename, ac, conn1, conn2, ac_freq=freq)
+        try:
+            z_ac[freq] = _run_spice(filename, ac, conn1, conn2, ac_freq=freq)
+        except Exception:
+            log.exception("[SPICE] AC simulation failed at %.0f Hz", freq)
+            z_ac[freq] = -1
 
         if rload_far is not None:
-            z_ac_conn1[freq] = _run_spice(
-                filename,
-                ac,
-                conn1,
-                0,
-                ac_freq=freq,
-                far_node=conn2,
-                rload_far=rload_far,
-            )
-            z_ac_conn2[freq] = _run_spice(
-                filename,
-                ac,
-                conn2,
-                0,
-                ac_freq=freq,
-                far_node=conn1,
-                rload_far=rload_far,
-            )
+            try:
+                z_ac_conn1[freq] = _run_spice(
+                    filename,
+                    ac,
+                    conn1,
+                    0,
+                    ac_freq=freq,
+                    far_node=conn2,
+                    rload_far=rload_far,
+                )
+            except Exception:
+                log.exception("[SPICE] Zin(conn1) failed at %.0f Hz", freq)
+                z_ac_conn1[freq] = -1
+            try:
+                z_ac_conn2[freq] = _run_spice(
+                    filename,
+                    ac,
+                    conn2,
+                    0,
+                    ac_freq=freq,
+                    far_node=conn1,
+                    rload_far=rload_far,
+                )
+            except Exception:
+                log.exception("[SPICE] Zin(conn2) failed at %.0f Hz", freq)
+                z_ac_conn2[freq] = -1
 
     return r_dc, z_ac, z_ac_conn1, z_ac_conn2
 
@@ -767,9 +831,20 @@ def simulate_network(
             continue
         hf = {}
         for f in frequencies or []:
-            hf[f] = analyze_trace(
-                elem["length"], elem["width"], elem["layer"], CuStack, frequency=f
-            )
+            try:
+                hf[f] = analyze_trace(
+                    elem["length"], elem["width"], elem["layer"], CuStack, frequency=f
+                )
+            except (ValueError, ZeroDivisionError):
+                log.exception(
+                    "analyze_trace failed for WIRE %s at %.0f MHz "
+                    "(L=%.2fmm, W=%.3fmm) -- falling back to DC resistance",
+                    elem.get("layer_name"),
+                    f / 1e6,
+                    elem["length"] * 1000,
+                    elem["width"] * 1000,
+                )
+                continue
             wr = hf[f].get("wavelength_ratio")
             if wr and wr > 0.05:
                 log.info(

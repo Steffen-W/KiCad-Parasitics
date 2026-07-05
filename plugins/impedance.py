@@ -1,4 +1,4 @@
-from math import atan, cosh, exp, log, log1p, pi, sinh, sqrt, tanh
+from math import atan, cosh, exp, isfinite, isnan, log, log1p, pi, sinh, sqrt, tanh
 from typing import Any
 
 # Physical constants (SI units)
@@ -23,6 +23,8 @@ def _elliptic_K(k: float) -> float:
     Returns:
         K(k)
     """
+    if isnan(k):
+        raise ValueError("k must be a finite number, got NaN")
     if k < 0 or k >= 1:
         if k == 1:
             return float("inf")
@@ -51,8 +53,16 @@ def _skin_depth(frequency: float, sigma: float, mu_r: float = 1.0) -> float:
     return 1.0 / sqrt(pi * frequency * mu_r * mu_0 * sigma)
 
 
+def _require_finite(**values: float) -> None:
+    """Raise ValueError if any named value is NaN or +/-Inf."""
+    for name, value in values.items():
+        if not isfinite(value):
+            raise ValueError(f"{name} must be finite, got {value}")
+
+
 def _validate_microstrip(w: float, h: float, epsilon_r: float) -> None:
     """Validate microstrip parameters."""
+    _require_finite(w=w, h=h, epsilon_r=epsilon_r)
     if w <= 0 or h <= 0:
         raise ValueError(f"w and h must be > 0, got w={w}, h={h}")
     if epsilon_r <= 0:
@@ -61,6 +71,7 @@ def _validate_microstrip(w: float, h: float, epsilon_r: float) -> None:
 
 def _validate_stripline(w: float, h: float, t: float, epsilon_r: float) -> None:
     """Validate stripline parameters."""
+    _require_finite(w=w, h=h, t=t, epsilon_r=epsilon_r)
     if w <= 0 or h <= 0:
         raise ValueError(f"w and h must be > 0, got w={w}, h={h}")
     if epsilon_r <= 0:
@@ -80,6 +91,7 @@ def _validate_stripline(w: float, h: float, t: float, epsilon_r: float) -> None:
 
 def _validate_coplanar(w: float, gap: float, epsilon_r: float) -> None:
     """Validate coplanar waveguide parameters."""
+    _require_finite(w=w, gap=gap, epsilon_r=epsilon_r)
     if w <= 0 or gap <= 0:
         raise ValueError(f"w and gap must be > 0, got w={w}, gap={gap}")
     if epsilon_r <= 0:
@@ -661,12 +673,13 @@ def analyze_stripline(
     Note:
         For stripline, epsilon_eff = epsilon_r (no dispersion, fully embedded)
     """
+    _require_finite(w=w, h=h, t=t, a=a, epsilon_r=epsilon_r)
     if w <= 0 or h <= 0:
         raise ValueError(f"w and h must be > 0, got w={w}, h={h}")
-    if t < 0:
-        raise ValueError(f"t must be >= 0, got {t}")
-    if a < 0:
-        raise ValueError(f"a must be >= 0, got {a}")
+    if t <= 0:
+        raise ValueError(f"t must be > 0, got {t}")
+    if a <= 0:
+        raise ValueError(f"a must be > 0, got {a}")
     if a + t >= h:
         raise ValueError(f"a + t must be < h, got a+t={a + t}, h={h}")
     if epsilon_r <= 1:
@@ -1085,6 +1098,11 @@ def _validate_via(
     via_length: float,
 ) -> None:
     """Validate via parameters."""
+    _require_finite(
+        hole_diameter=hole_diameter,
+        plating_thickness=plating_thickness,
+        via_length=via_length,
+    )
     if hole_diameter <= 0:
         raise ValueError(f"hole_diameter must be > 0, got {hole_diameter}")
     if plating_thickness <= 0:

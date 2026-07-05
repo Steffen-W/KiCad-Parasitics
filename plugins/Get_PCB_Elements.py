@@ -70,11 +70,17 @@ def getHashList(objlist: Iterable[Any]) -> list[int]:
     return [getHash(obj) for obj in objlist]
 
 
-def getPolygon(obj: pcbnew.PAD) -> list[tuple[float, ...]]:
+def getPolygon(obj: pcbnew.PAD, layer: int) -> list[tuple[float, ...]]:
+    """Get the pad's effective polygon on the given copper layer.
+
+    KiCad's no-arg GetEffectivePolygon() only works for pads that include
+    F.Cu; other layers (or KiCad versions without the no-arg overload) need
+    the explicit aLayer form.
+    """
     try:
         poly_obj = obj.GetEffectivePolygon()
-    except Exception:
-        poly_obj = obj.GetEffectivePolygon(aLayer=0)  # TODO correct layer
+    except TypeError:
+        poly_obj = obj.GetEffectivePolygon(aLayer=layer)
     Polygon = [ToM(poly_obj.CVertex(p)) for p in range(poly_obj.FullPointCount())]
     return Polygon
 
@@ -143,7 +149,7 @@ def getConnections(
                     ConnEnd.append(getHash(con))
 
     for con in connect.GetConnectedPads(track):
-        Polygon = getPolygon(con)
+        Polygon = getPolygon(con, track.GetLayer())
         Start_ = MoveToObjCenter(Start, ToM(track.GetWidth()), ToM(con.GetPosition()))
         End_ = MoveToObjCenter(End, ToM(track.GetWidth()), ToM(con.GetPosition()))
 
@@ -216,7 +222,7 @@ def Get_PCB_Elements(
             if len(Layers):
                 try:
                     poly_obj = item.GetEffectivePolygon()
-                except Exception:
+                except TypeError:
                     poly_obj = item.GetEffectivePolygon(aLayer=Layers[0])
 
                 temp["area"] = ToM(ToM(poly_obj.Area()))
