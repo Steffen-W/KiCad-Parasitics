@@ -21,7 +21,7 @@ jobs:
         run: sudo apt-get install -y --no-install-recommends jq zip
 
       - name: Build ZIP
-        run: bash generate_zip.sh --no-update
+        run: bash generate_zip.sh
 
       - name: Delete old nightly release
         run: |

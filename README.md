@@ -1,4 +1,4 @@
-![Static Badge](https://img.shields.io/badge/Supports_KiCad-v6%2C_v7%2C_v8%2C_v9-%23314cb0)
+![Static Badge](https://img.shields.io/badge/Supports_KiCad-v8%2C_v9-%23314cb0)
 ![Static Badge](https://img.shields.io/badge/Supports-Windows%2C_Mac%2C_Linux-Green)
 
 [![GitHub Release](https://img.shields.io/github/release/Steffen-W/KiCad-Parasitics.svg)](https://github.com/Steffen-W/KiCad-Parasitics/releases/latest)
@@ -135,7 +135,6 @@ Operating systems
 - [x] Mac
 
 KiCad versions
-- [x] KiCad 7
 - [x] KiCad 8
 - [x] KiCad 9
 - [] KiCad 10
