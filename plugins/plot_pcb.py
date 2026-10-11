@@ -3,9 +3,11 @@
 import json
 import os
 from typing import Any
+
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle, Polygon
-from pcb_types import WIRE, VIA, PAD, ZONE
+
+from pcb_types import PAD, VIA, WIRE, ZONE
 
 DATA_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "debug_ItemList.json"
@@ -36,10 +38,10 @@ def _collect_nodes(
 
 
 def plot_items(data: dict[str, Any]) -> None:
-    fig, ax = plt.subplots(figsize=(14, 14))
+    _fig, ax = plt.subplots(figsize=(14, 14))
     node_positions = {}
 
-    for oid, d in data.items():
+    for d in data.values():
         typ = d["type"]
         color = _color(d.get("layer", []))
         outline = d.get("_outline")

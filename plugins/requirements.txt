@@ -1,13 +1,19 @@
+# Minimum Python is 3.9 (KiCad's bundled interpreter on macOS); every floor
+# below must stay installable there.
+
 # The numeric stack is constrained by bfieldtools 0.11.3, which is unmaintained
-# and only works with older scipy/numpy:
+# and only works with older scipy/numpy/setuptools:
 #   * scipy >= 1.15 removed scipy.special.lpmn, which bfieldtools imports, so a
 #     newer scipy breaks "import bfieldtools" with an ImportError.
-#   * scipy 1.13.x in turn pins numpy < 2.3 itself, so numpy needs no extra cap.
-# Verified working: numpy 2.2.6 + scipy 1.13.1. Do not raise the scipy ceiling
-# without checking that "import bfieldtools" still succeeds.
+#   * scipy < 1.15 pins numpy < 2.3 itself, so numpy needs no extra cap.
+#   * setuptools >= 82 dropped pkg_resources, which bfieldtools imports.
+# Verified working: numpy 2.0.2 + scipy 1.13.1 (Python 3.9) and numpy 2.2.6 +
+# scipy 1.14.1 (Python 3.12). Do not raise the scipy ceiling without checking
+# that "import bfieldtools" still succeeds.
 bfieldtools>=0.11.3
 scipy>=1.13.1,<1.15
-numpy>=2.2.6
+numpy>=2.0
+setuptools<82
 
 # These track recent releases; floors are the tested minimums.
 kicad-python>=0.5.0

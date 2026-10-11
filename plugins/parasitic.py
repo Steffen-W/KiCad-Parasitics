@@ -1,34 +1,23 @@
+from __future__ import annotations
+
+import faulthandler
+import json
+import logging
+import math
 import os
 import re
 import sys
-import warnings
 import traceback
-import math
-import json
-import logging
-import faulthandler
-from typing import Any
+import warnings
+from typing import Any, TextIO
+
 import wx
 
 warnings.filterwarnings("ignore", message="pkg_resources is deprecated")
 
-# Capture hard native crashes (segfaults in numpy/scipy/bfieldtools) that a
-# Python try/except cannot catch. Without this such a crash takes the process
-# down silently with no traceback ("no output" when pressing Calc Inductance).
-try:
-    _crash_log = open(
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "crash.log"),
-        "a",
-        buffering=1,
-        encoding="utf-8",
-    )
-    faulthandler.enable(file=_crash_log, all_threads=True)
-except Exception:
-    faulthandler.enable(all_threads=True)
-
 venv = os.environ.get("VIRTUAL_ENV")
 if venv:
-    version = "python{}.{}".format(sys.version_info.major, sys.version_info.minor)
+    version = f"python{sys.version_info.major}.{sys.version_info.minor}"
     venv_site_packages = os.path.join(venv, "lib", version, "site-packages")
     if venv_site_packages in sys.path:
         sys.path.remove(venv_site_packages)
@@ -36,17 +25,27 @@ if venv:
 
 
 try:
-    from .Connect_Nets import Connect_Nets
+    from .connect_nets import Connect_Nets
 except ImportError:
-    from Connect_Nets import Connect_Nets
+    from connect_nets import Connect_Nets
 try:
-    from .Get_Distance import find_all_reachable_nodes
+    from .get_distance import find_all_reachable_nodes
 except ImportError:
-    from Get_Distance import find_all_reachable_nodes
+    from get_distance import find_all_reachable_nodes
 try:
-    from .Get_Parasitic import extract_network, find_path, simulate_network
+    from .get_parasitic import (
+        SpiceUnavailableError,
+        extract_network,
+        find_path,
+        simulate_network,
+    )
 except ImportError:
-    from Get_Parasitic import extract_network, find_path, simulate_network
+    from get_parasitic import (
+        SpiceUnavailableError,
+        extract_network,
+        find_path,
+        simulate_network,
+    )
 try:
     from .network_display import format_network_info
 except ImportError:
@@ -133,13 +132,14 @@ def analyze_pcb_parasitic(
 
     Returns:
         dict with: resistance_dc, impedance_ac, distance, short_path_resistance,
-                   area, network_info, graph, path, conn1, conn2, error
+                   area, network_info, graph, path, conn1, conn2, error,
+                   spice_unavailable (message when libngspice cannot be loaded)
     """
     result: dict[str, Any] = {
         "resistance_dc": None,
         "impedance_ac": {},
         "distance": float("inf"),
-        "short_path_resistance": -1,
+        "short_path_resistance": None,
         "area": {},
         "network_info": None,
         "graph": None,
@@ -147,6 +147,7 @@ def analyze_pcb_parasitic(
         "conn1": None,
         "conn2": None,
         "error": None,
+        "spice_unavailable": None,
     }
 
     # Extract network ONCE (DC only, no HF calculation)
@@ -181,6 +182,12 @@ def analyze_pcb_parasitic(
 
     conn1, conn2 = best_conn[0], best_conn[1]
     result["conn1"], result["conn2"] = conn1, conn2
+    if conn1 == conn2:
+        result["error"] = (
+            "The selected elements touch each other directly, "
+            "so there is no copper path between them to analyze."
+        )
+        return result
 
     # Get full path info for best connection
     Distance, path, short_path_RES = find_path(network, conn1, conn2)
@@ -201,36 +208,29 @@ def analyze_pcb_parasitic(
         log.error("%s", result["error"])
         return result
 
-    log.debug("simulate_network start")
-
-    # Simulate with HF parameters
-    Resistance, Z_ac, Z_ac_conn1, Z_ac_conn2, network_info = simulate_network(
-        network,
-        conn1,
-        conn2,
-        CuStack,
-        frequencies=frequencies,
-        rload_far=_ZIN_TERMINATION_OHM,
+    result.update(
+        {
+            "distance": Distance,
+            "short_path_resistance": short_path_RES,
+            "area": network["area"],
+            "graph": network["graph"],
+            "path": path,
+        }
     )
 
-    log.debug("simulate_network done")
-
-    for freq, z in sorted(Z_ac_conn1.items()):
-        log.debug(
-            "[Zin conn1] %.0f Hz: |Z|=%.3f mΩ (%.3f + j%.3f mΩ)",
-            freq,
-            abs(z) * 1000,
-            z.real * 1000,
-            z.imag * 1000,
+    try:
+        Resistance, Z_ac, Z_ac_conn1, Z_ac_conn2, network_info = simulate_network(
+            network,
+            conn1,
+            conn2,
+            CuStack,
+            frequencies=frequencies,
+            rload_far=_ZIN_TERMINATION_OHM,
         )
-    for freq, z in sorted(Z_ac_conn2.items()):
-        log.debug(
-            "[Zin conn2] %.0f Hz: |Z|=%.3f mΩ (%.3f + j%.3f mΩ)",
-            freq,
-            abs(z) * 1000,
-            z.real * 1000,
-            z.imag * 1000,
-        )
+    except SpiceUnavailableError as e:
+        log.error("%s", e)
+        result["spice_unavailable"] = str(e)
+        return result
 
     result.update(
         {
@@ -239,12 +239,7 @@ def analyze_pcb_parasitic(
             "impedance_ac_conn1": Z_ac_conn1,
             "impedance_ac_conn2": Z_ac_conn2,
             "zin_termination_ohm": _ZIN_TERMINATION_OHM,
-            "distance": Distance,
-            "short_path_resistance": short_path_RES,
-            "area": network["area"],
             "network_info": network_info,
-            "graph": network["graph"],
-            "path": path,
         }
     )
     return result
@@ -280,7 +275,7 @@ def format_result_message(
 
     lines.append(f"Shortest distance ≈ {Distance * 1000:.3f} mm")
 
-    if short_path_RES >= 0:
+    if short_path_RES is not None:
         lines.append(f"Shortest path resistance ≈ {short_path_RES * 1000:.3f} mΩ")
         if short_path_RES == 0:
             lines.append("(Zones treated as ideal conductors)")
@@ -291,9 +286,7 @@ def format_result_message(
         lines.append(f"No connection found [DEBUG: {log_file}]")
 
     # Build impedance table (DC + AC)
-    has_valid_dc = (
-        Resistance is not None and not math.isinf(Resistance) and Resistance >= 0
-    )
+    has_valid_dc = Resistance is not None
     has_ac = bool(Z_ac)
     has_zin = bool(Z_ac_conn1) or bool(Z_ac_conn2)
     termination: float | None = result.get("zin_termination_ohm")
@@ -318,29 +311,28 @@ def format_result_message(
             lines.append(
                 f"{'DC':>8}  {dc_str:>12}  {dc_str:>12}  {'-':>12}{zin_suffix}"
             )
-        elif Resistance is not None and Resistance < 0:
-            lines.append("DC         [ngspice error]")
+        else:
+            lines.append(f"{'DC':>8}  {'[error]':>12}")
 
         for freq, z in sorted(Z_ac.items()):
             f_str = format_si(freq, "Hz", precision=0)
-            if isinstance(z, complex):
-                row = f"{f_str:>8}  {format_si(abs(z), 'Ω'):>12}  {format_si(z.real, 'Ω'):>12}  {format_si(z.imag, 'Ω'):>12}"
-            elif z >= 0:
-                zs = format_si(z, "Ω")
-                row = f"{f_str:>8}  {zs:>12}  {zs:>12}  {'-':>12}"
-            else:
+            if z is None:
                 lines.append(f"{f_str:>8}  {'[error]':>12}")
                 continue
+            z = complex(z)
+            row = f"{f_str:>8}  {format_si(abs(z), 'Ω'):>12}  {format_si(z.real, 'Ω'):>12}  {format_si(z.imag, 'Ω'):>12}"
             if has_zin:
-                zin1 = Z_ac_conn1.get(freq)
-                zin2 = Z_ac_conn2.get(freq)
-                zin1_str = format_si(abs(zin1), "Ω") if zin1 is not None else "-"
-                zin2_str = format_si(abs(zin2), "Ω") if zin2 is not None else "-"
-                row += f"  {zin1_str:>14}  {zin2_str:>14}"
+                row += "".join(
+                    f"  {_format_zin(zin_by_freq, freq):>14}"
+                    for zin_by_freq in (Z_ac_conn1, Z_ac_conn2)
+                )
             lines.append(row)
-    elif Resistance is not None and Resistance < 0:
+    elif result["spice_unavailable"]:
         lines.append("")
-        lines.append("ERROR: ngspice simulation failed (check installation)")
+        lines.append(result["spice_unavailable"])
+    else:
+        lines.append("")
+        lines.append("ERROR: ngspice simulation failed, see debug_parasitic.log")
 
     if Area:
         lines.append("")
@@ -353,6 +345,14 @@ def format_result_message(
             )
 
     return "\n".join(lines)
+
+
+def _format_zin(zin_by_freq: dict[float, Any], freq: float) -> str:
+    """|Zin| at freq; "-" when not simulated, "[error]" when the simulation failed."""
+    if freq not in zin_by_freq:
+        return "-"
+    zin = zin_by_freq[freq]
+    return "[error]" if zin is None else format_si(abs(zin), "Ω")
 
 
 _SI_PREFIXES = [
@@ -624,11 +624,37 @@ def SaveDictToFile(data: dict[str, Any], filename: str) -> None:
         json.dump(data, f, indent=2, default=str)
 
 
+_crash_log: TextIO | None = None
+
+
+def _enable_crash_log() -> None:
+    """Write tracebacks of native crashes, which no try/except can catch, to crash.log.
+
+    faulthandler writes to the file until the process exits, so it stays open.
+    """
+    global _crash_log
+    if _crash_log is not None:
+        return
+    try:
+        _crash_log = open(  # noqa: SIM115
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "crash.log"),
+            "a",
+            buffering=1,
+            encoding="utf-8",
+        )
+    except OSError:
+        log.warning("crash.log not writable, native crashes go to stderr")
+        faulthandler.enable(all_threads=True)
+        return
+    faulthandler.enable(file=_crash_log, all_threads=True)
+
+
 def run_plugin(
     ItemList: dict[Any, Any],
     CuStack: dict[int, CuLayer],
     net_tie_info: dict[str, Any] | None = None,
 ) -> None:
+    _enable_crash_log()
     try:
         plugin_path = os.path.dirname(os.path.abspath(__file__))
 
@@ -679,8 +705,8 @@ def run_plugin(
                             txt,
                         )
                         f.write(txt)
-                except Exception:
-                    pass
+                except (OSError, TypeError, ValueError):
+                    log.warning("Writing debug_network_info.json failed", exc_info=True)
 
             message = format_result_message(result, CuStack, net_tie_info=net_tie_info)
             network_debug_text = None
@@ -706,8 +732,8 @@ def run_plugin(
         dlg.Destroy()
 
     except Exception:
+        log.exception("Fatal error")
         error_msg = traceback.format_exc()
-        print("[FATAL ERROR]", error_msg)
         wx.MessageDialog(
             None, error_msg, "Fatal Error", wx.OK | wx.ICON_ERROR
         ).ShowModal()
@@ -715,6 +741,9 @@ def run_plugin(
 
 if __name__ == "__main__":
     from kipy import KiCad, errors
+
+    from get_pcb_elements_ipc import Get_PCB_Elements_IPC, SelectionError
+    from get_pcb_stackup_ipc import Get_PCB_Stackup_IPC
 
     logging.basicConfig(
         level=logging.DEBUG,
@@ -738,35 +767,34 @@ if __name__ == "__main__":
         "sharedspice",
     ):
         logging.getLogger(_logger_name).setLevel(logging.WARNING)
-    logging.debug("parasitic.py started")
+    log.debug("parasitic.py started")
 
     app = wx.App()
     try:
         kicad = KiCad()
-        logging.debug("Connected to KiCad %s", kicad.get_version())
+        log.debug("Connected to KiCad %s", kicad.get_version())
 
         try:
             board = kicad.get_board()
-        except Exception:
-            logging.error("Failed to get board")
+        except errors.ApiError:
+            log.exception("Failed to get board")
             print("Error: No PCB board found. Is a board open in KiCad?")
             sys.exit(1)
-        board_FileName = board.document.board_filename
-        logging.debug("Board: %s", board.document.board_filename)
-
-        from Get_PCB_Elements_IPC import Get_PCB_Elements_IPC
-        from Get_PCB_Stackup_IPC import Get_PCB_Stackup_IPC
+        log.debug("Board: %s", board.document.board_filename)
 
         ItemList, net_tie_info = Get_PCB_Elements_IPC(board)
-        logging.debug("Got %d elements from IPC API", len(ItemList))
+        log.debug("Got %d elements from IPC API", len(ItemList))
 
         CuStack = Get_PCB_Stackup_IPC(board)
         run_plugin(ItemList, CuStack, net_tie_info)
         # Keep event loop alive for any open PlotFrame windows
         app.MainLoop()
     except errors.ConnectionError:
-        logging.exception("ConnectionError")
+        log.exception("ConnectionError")
         print("ConnectionError: Failed to connect to KiCad. Is KiCad running?")
-    except Exception as e:
-        logging.exception("__main__")
-        print(f"Error: {e}")
+    except SelectionError as e:
+        log.warning("Invalid selection: %s", e)
+        wx.MessageBox(str(e), "Parasitics", wx.OK | wx.ICON_WARNING)
+    except Exception:
+        log.exception("__main__")
+        wx.MessageBox(traceback.format_exc(), "Fatal Error", wx.OK | wx.ICON_ERROR)

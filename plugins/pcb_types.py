@@ -2,7 +2,9 @@
 # the plugin suite.  Import these constants instead of using literal strings so
 # that typos are caught at import time and a single change propagates everywhere.
 
-from typing import Any, Required, TypedDict
+from __future__ import annotations
+
+from typing import Any, TypedDict, Union
 
 # Element types (value of the "type" key in the element dicts)
 WIRE = "WIRE"
@@ -12,27 +14,30 @@ PAD = "PAD"
 ZONE = "ZONE"
 
 # Layer indices used in the coil-generator JSON format (not KiCad layer IDs).
-# Plot_PCB.py maps these to colours: 0 → red (top), 2 → blue (bottom).
+# plot_pcb.py maps these to colours: 0 → red (top), 2 → blue (bottom).
 TOP_LAYER = 0
 BOTTOM_LAYER = 2
 
 
-class NetworkElement(TypedDict, total=False):
+class _NetworkElementBase(TypedDict):
+    """Mandatory fields always present in every network element."""
+
+    type: str
+    nodes: tuple[int, int]
+    resistance: float
+    length: float
+
+
+class NetworkElement(_NetworkElementBase, total=False):
     """A single element in the PCB resistance network (WIRE / VIA / ZONE).
 
-    The four ``Required`` fields are present in every element type.
+    The four base fields (type, nodes, resistance, length) are always present.
     All other fields are type-specific:
 
     WIRE  – width, layer, layer_name, start, end  (+ arc fields mid/radius/angle/midline_pts)
     VIA   – drill, layer1, layer2, layer1_name, layer2_name, inductance, capacitance
     ZONE  – layer, layer_name
     """
-
-    # ---- common (always present) ----
-    type: Required[str]
-    nodes: Required[tuple[int, int]]
-    resistance: Required[float]
-    length: Required[float]
 
     # ---- WIRE & ZONE ----
     layer: int
@@ -96,6 +101,8 @@ class CuLayer(_CuLayerBase, total=False):
     gap: float | None  # coplanar gap in m, None for other models
 
 
-# Type alias for the SPICE netlist element tuple (component, node1, node2, value).
-# Nodes are int for real PCB nodes, str for synthetic segmentation nodes.
-SpiceElement = tuple[str, int | str, int | str, float]
+# SPICE node: int for real PCB nodes, str for synthetic segmentation nodes.
+SpiceNode = Union[int, str]
+
+# SPICE netlist element tuple (component, node1, node2, value).
+SpiceElement = tuple[str, SpiceNode, SpiceNode, float]

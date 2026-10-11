@@ -4,20 +4,23 @@ TODO:
 - PolygonWithHoles: _linearize_polyline arc handling could be improved for edge cases
 """
 
+from __future__ import annotations
+
 import logging
 import math
-from typing import Any
+from typing import Any, NamedTuple
 
 from kipy.board import Board
 from kipy.board_types import ArcTrack, FootprintInstance
+from kipy.errors import ApiError
 from kipy.util.board_layer import canonical_name, is_copper_layer
 
 try:
-    from .Get_PCB_Stackup import extract_layer_from_string
-    from .pcb_types import WIRE, VIA, PAD, ZONE
+    from .get_pcb_stackup import extract_layer_from_string
+    from .pcb_types import PAD, VIA, WIRE, ZONE
 except ImportError:
-    from Get_PCB_Stackup import extract_layer_from_string
-    from pcb_types import WIRE, VIA, PAD, ZONE
+    from get_pcb_stackup import extract_layer_from_string
+    from pcb_types import PAD, VIA, WIRE, ZONE
 
 log = logging.getLogger(__name__)
 
@@ -96,7 +99,7 @@ def _pos_m(vec2: Any) -> tuple[float, float]:
 
 
 def _layer_v9(bl: Any) -> int | None:
-    """BoardLayer enum → v9 layer int (same numbering as Get_PCB_Stackup)."""
+    """BoardLayer enum → v9 layer int (same numbering as get_pcb_stackup)."""
     result: int | None = extract_layer_from_string(canonical_name(bl))
     return result
 
@@ -105,24 +108,33 @@ def _obj_id(obj: Any) -> str:
     return str(obj.id.value)
 
 
+class SelectionError(ValueError):
+    """The board selection cannot be analyzed; the message addresses the user."""
+
+
+class ArcCircle(NamedTuple):
+    """Circle through the three points of an arc (m, rad)."""
+
+    center: tuple[float, float]
+    radius: float
+    start_angle: float
+
+
 def _arc_geometry(
     start: tuple[float, float], end: tuple[float, float], mid: tuple[float, float]
-) -> tuple[float | None, float, float, tuple[float, float] | None, float | None]:
-    """Compute arc radius, sweep angle and arc length from three points (m).
+) -> tuple[float, float, ArcCircle | None]:
+    """Compute sweep angle, arc length and circle from three points (m).
 
-    Returns (radius, angle, arc_length, center, start_angle) where angle is
-    the signed sweep in radians (positive = CCW, negative = CW).
-    center is (ux, uy) and start_angle the angle of the start point.
-    Falls back to (None, 0, chord, None, None) if the three points are collinear.
-    center and start_angle are always both None or both set.
+    Returns (angle, arc_length, circle) where angle is the signed sweep in
+    radians (positive = CCW, negative = CW). For collinear points the result
+    is (0, chord, None).
     """
     sx, sy = start
     mx, my = mid
     ex, ey = end
     D = 2 * (sx * (my - ey) + mx * (ey - sy) + ex * (sy - my))
     if abs(D) < 1e-30:
-        chord = math.hypot(ex - sx, ey - sy)
-        return None, 0.0, chord, None, None
+        return 0.0, math.hypot(ex - sx, ey - sy), None
 
     ux = (
         (sx * sx + sy * sy) * (my - ey)
@@ -156,8 +168,7 @@ def _arc_geometry(
         a_start_cw = _norm(a_start, a_end)
         sweep = -(a_start_cw - a_end)
 
-    arc_length = abs(sweep) * r
-    return r, sweep, arc_length, (ux, uy), a_start
+    return sweep, abs(sweep) * r, ArcCircle((ux, uy), r, a_start)
 
 
 def _cu_layers(layers: Any, enabled_layers: Any = None) -> list[int]:
@@ -291,7 +302,7 @@ def _collect_footprint_shapes(
             start = _pos_m(shape.start)
             end = _pos_m(shape.end)
             mid = _pos_m(shape.mid)
-            r_m, angle, arc_length, center, arc_sa = _arc_geometry(start, end, mid)
+            angle, arc_length, circle = _arc_geometry(start, end, mid)
             if arc_length == 0:
                 continue
             item = {
@@ -313,13 +324,11 @@ def _collect_footprint_shapes(
                 "midline_pts": [start, end],
             }
             midline_pts: list[tuple[float, float]] = [start, end]
-            if r_m is not None:
-                item["radius"] = r_m
-                if center is not None:
-                    assert arc_sa is not None
-                    midline_pts = [start] + _arc_points(
-                        center, r_m, arc_sa, angle, width
-                    )
+            if circle is not None:
+                item["radius"] = circle.radius
+                midline_pts = [start] + _arc_points(
+                    circle.center, circle.radius, circle.start_angle, angle, width
+                )
             item["midline_pts"] = midline_pts
             item["_outline"] = _outline_from_midline(midline_pts, width / 2)
             items[oid] = item
@@ -333,7 +342,7 @@ def Get_PCB_Elements_IPC(
     """Collect all tracks/vias/pads/zones from the board via IPC API.
 
     Returns (ItemList, net_tie_info); ItemList uses the same dict format as
-    Get_PCB_Elements.Get_PCB_Elements(). net_tie_info is None unless the
+    get_pcb_elements.Get_PCB_Elements(). net_tie_info is None unless the
     selection was expanded through Net Tie footprints.
     """
     selection_ids = {item.id.value for item in board.get_selection()}
@@ -353,21 +362,25 @@ def Get_PCB_Elements_IPC(
             selection = fp_pads
             selection_ids = {pad.id.value for pad in fp_pads}
 
-    nets = {item.net.name for item in selection if hasattr(item, "net")}
-
     if len(selection) != 2:
-        log.warning("Expected 2 selected items, got %d", len(selection))
-        print(f"Error: Please select exactly 2 elements (selected: {len(selection)})")
-        return {}, None
+        raise SelectionError(
+            f"Select exactly two elements (selected: {len(selection)})."
+        )
+    if not all(hasattr(item, "net") for item in selection):
+        raise SelectionError(
+            "Both selected elements must be copper items with a net "
+            "(pads, vias, tracks or zones)."
+        )
+    nets = {item.net.name for item in selection}
 
     # Expand nets transitively through Net Tie footprints
     target_nets, net_tie_fps = _expand_nets_via_net_ties(board, nets)
 
     if len(nets) > 1 and not net_tie_fps:
-        # Multiple nets selected but no net-tie bridges them
-        log.warning("Selected items belong to different nets: %s", nets)
-        print(f"Error: Selected items must belong to the same net (found: {nets})")
-        return {}, None
+        raise SelectionError(
+            "Selected elements must belong to the same net or be connected by "
+            f"a Net Tie (found: {', '.join(sorted(nets))})."
+        )
 
     log.info("Target nets: %s", target_nets)
 
@@ -526,8 +539,8 @@ def Get_PCB_Elements_IPC(
                 outline_pts = _linearize_polyline(poly.outline)
                 if len(outline_pts) >= 3:
                     ItemList[oid]["_outline"] = outline_pts
-        except Exception:
-            log.debug("Failed to get pad polygon for %s", oid)
+        except ApiError as e:
+            log.debug("Failed to get pad polygon for %s: %s", oid, e)
 
     # --- Zones ---
     for zone in board.get_zones():
@@ -614,15 +627,13 @@ def _point_in_polygon(
     p1x, p1y = polygon[0]
     for i in range(1, n + 1):
         p2x, p2y = polygon[i % n]
-        if y > min(p1y, p2y):
-            if y <= max(p1y, p2y):
-                if x <= max(p1x, p2x):
-                    if p1y != p2y:
-                        x_intersect = (y - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
-                        if p1x == p2x or x <= x_intersect:
-                            inside = not inside
-                    elif p1x == p2x:
-                        inside = not inside
+        if y > min(p1y, p2y) and y <= max(p1y, p2y) and x <= max(p1x, p2x):
+            if p1y != p2y:
+                x_intersect = (y - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
+                if p1x == p2x or x <= x_intersect:
+                    inside = not inside
+            elif p1x == p2x:
+                inside = not inside
         p1x, p1y = p2x, p2y
     return inside
 

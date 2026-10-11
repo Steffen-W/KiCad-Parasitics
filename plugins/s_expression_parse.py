@@ -18,7 +18,7 @@ def parse_sexp(sexp: str) -> list[Any]:
     stack: list[list[Any]] = []
     out: list[Any] = []
     for termtypes in re.finditer(term_regex, sexp):
-        term, value = [(t, v) for t, v in termtypes.groupdict().items() if v][0]
+        term, value = next((t, v) for t, v in termtypes.groupdict().items() if v)
         log.debug("%-7s %-14s %-44r %-r", term, value, out, stack)
         if term == "brackl":
             stack.append(out)
@@ -45,17 +45,6 @@ def parse_sexp(sexp: str) -> list[Any]:
     return result
 
 
-def print_sexp(exp: list[Any] | str | int | float) -> str:
-    out = ""
-    if isinstance(exp, list):
-        out += "(" + " ".join(print_sexp(x) for x in exp) + ")"
-    elif isinstance(exp, str) and re.search(r"[\s()]", exp):
-        out += '"%s"' % repr(exp)[1:-1].replace('"', '"')
-    else:
-        out += "%s" % exp
-    return out
-
-
 if __name__ == "__main__":
     sexp = """(sym_lib_table
   (version 7)
@@ -67,7 +56,6 @@ if __name__ == "__main__":
   )"""
 
     parsed = parse_sexp(sexp)
-    # pprint(parsed)
     for line in parsed:
         if isinstance(line, list) and line[0] == "lib":
             for item in line:

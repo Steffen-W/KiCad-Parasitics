@@ -5,17 +5,75 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Runs are serialized: each one deletes and recreates the shared nightly tag.
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
 jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install check tools
+        run: pip install ruff==0.16.10 mypy==2.4.0 vermin==1.8.0
+
+      - name: Lint and format
+        run: ruff check && ruff format --check
+
+      - name: Type check
+        run: mypy plugins
+
+      - name: Python 3.9 compatibility
+        run: vermin -t=3.9- --no-tips --violations --eval-annotations plugins
+
+      - name: Requirements installable with KiCad's Python 3.9 on macOS
+        run: |
+          for platform in macosx_14_0_arm64 macosx_10_13_x86_64; do
+            pip install --dry-run --ignore-installed --quiet --only-binary :all: \
+              --platform "$platform" --python-version 3.9 --implementation cp \
+              --target "$RUNNER_TEMP/py39" -r plugins/requirements.txt
+          done
+
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install ngspice
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libngspice0
+
+      - name: Install test dependencies
+        run: pip install pytest numpy scipy kicad-python -c plugins/requirements.txt
+
+      - name: Run tests
+        run: pytest
+
   build:
-    runs-on: ubuntu-latest
+    needs: [check, test]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       contents: write
 
     steps:
-      - name: Checkout with submodules
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
+      - uses: actions/checkout@v5
 
       - name: Install dependencies
         run: sudo apt-get install -y --no-install-recommends jq zip

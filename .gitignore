@@ -5,5 +5,6 @@ preversion
 *.zip
 .vscode
 *.net
-test*
+/test/
 venv*
+fixme.md

@@ -1,15 +1,20 @@
 """Get PCB stackup via kipy IPC API (KiCad 9+)."""
 
+from __future__ import annotations
+
+import logging
 from typing import Any
 
 from kipy.util.board_layer import canonical_name, is_copper_layer
 
 try:
-    from .Get_PCB_Stackup import extract_layer_from_string, Get_PCB_Stackup_fun
+    from .get_pcb_stackup import Get_PCB_Stackup_fun, extract_layer_from_string
     from .pcb_types import CuLayer, DielectricInfo
 except ImportError:
-    from Get_PCB_Stackup import extract_layer_from_string, Get_PCB_Stackup_fun
+    from get_pcb_stackup import Get_PCB_Stackup_fun, extract_layer_from_string
     from pcb_types import CuLayer, DielectricInfo
+
+log = logging.getLogger(__name__)
 
 
 def Get_PCB_Stackup_IPC(board: Any) -> dict[int, CuLayer]:
@@ -82,15 +87,18 @@ def Get_PCB_Stackup_IPC(board: Any) -> dict[int, CuLayer]:
         else:
             model = "R only"
 
-        CuStack[entry["layer_id"]] = {
-            "thickness": entry["thickness"],
-            "name": entry["name"],
-            "abs_height": abs_height,
-            "die_above": die_above,
-            "die_below": die_below,
-            "model": model,
-            "gap": None,
-        }
+        if entry["layer_id"] is None:
+            log.warning("Unknown copper layer %r in stackup, skipped", entry["name"])
+        else:
+            CuStack[entry["layer_id"]] = {
+                "thickness": entry["thickness"],
+                "name": entry["name"],
+                "abs_height": abs_height,
+                "die_above": die_above,
+                "die_below": die_below,
+                "model": model,
+                "gap": None,
+            }
         abs_height += entry["thickness"]
 
     if not CuStack:

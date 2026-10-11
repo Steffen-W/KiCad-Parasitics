@@ -1,12 +1,17 @@
+from __future__ import annotations
+
 import logging
+from collections.abc import Iterable, Sequence
+from collections.abc import Set as AbstractSet
+from typing import Any, overload
+
 import numpy as np
 import pcbnew
-from typing import AbstractSet, Any, Iterable, overload, Sequence, Union
 
 try:
-    from .pcb_types import WIRE, VIA, PAD, ZONE
+    from .pcb_types import PAD, VIA, WIRE, ZONE
 except ImportError:
-    from pcb_types import WIRE, VIA, PAD, ZONE
+    from pcb_types import PAD, VIA, WIRE, ZONE
 
 log = logging.getLogger(__name__)
 
@@ -14,7 +19,7 @@ log = logging.getLogger(__name__)
 @overload
 def ToM(value: tuple[Any, ...]) -> tuple[float, ...]: ...
 @overload
-def ToM(value: int | float) -> float: ...
+def ToM(value: float) -> float: ...
 
 
 def ToM(value: Any) -> Any:
@@ -37,7 +42,7 @@ def SaveDictToFile(dict_name: dict[Any, Any], filename: str) -> None:
 
 
 def IsPointInPolygon(
-    point_: Union[Sequence[float], "np.ndarray[Any, Any]"],
+    point_: Sequence[float] | np.ndarray[Any, Any],
     polygon_: Sequence[Sequence[float]],
 ) -> bool:
     """Ray casting algorithm to check if point is inside polygon."""
@@ -49,15 +54,13 @@ def IsPointInPolygon(
     p1x, p1y = polygon_[0]
     for i in range(1, n + 1):
         p2x, p2y = polygon_[i % n]
-        if y > min(p1y, p2y):
-            if y <= max(p1y, p2y):
-                if x <= max(p1x, p2x):
-                    if p1y != p2y:
-                        x_intersect = (y - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
-                        if p1x == p2x or x <= x_intersect:
-                            inside = not inside
-                    elif p1x == p2x:
-                        inside = not inside
+        if y > min(p1y, p2y) and y <= max(p1y, p2y) and x <= max(p1x, p2x):
+            if p1y != p2y:
+                x_intersect = (y - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
+                if p1x == p2x or x <= x_intersect:
+                    inside = not inside
+            elif p1x == p2x:
+                inside = not inside
         p1x, p1y = p2x, p2y
     return inside
 
@@ -98,17 +101,17 @@ def getLayer(
 def getConnections(
     track: pcbnew.PCB_TRACK, connect: pcbnew.CONNECTIVITY_DATA
 ) -> tuple[list[int], list[int]]:
-    def getVectorLen(vector: "np.ndarray[Any, Any]") -> float:
+    def getVectorLen(vector: np.ndarray[Any, Any]) -> float:
         return float(np.sqrt(vector.dot(vector)))
 
     def getDistance(
-        point1: "np.ndarray[Any, Any]", point2: "np.ndarray[Any, Any]"
+        point1: np.ndarray[Any, Any], point2: np.ndarray[Any, Any]
     ) -> float:
         return getVectorLen(np.array(point2) - np.array(point1))
 
     def MoveToObjCenter(
-        wirePos: "np.ndarray[Any, Any]", width: float, objPos: "np.ndarray[Any, Any]"
-    ) -> "np.ndarray[Any, Any]":
+        wirePos: np.ndarray[Any, Any], width: float, objPos: np.ndarray[Any, Any]
+    ) -> np.ndarray[Any, Any]:
         objPos = np.array(objPos)
         wirePos = np.array(wirePos)
 
@@ -116,7 +119,7 @@ def getConnections(
 
         x = np.sign(diffVector[0]) * min([abs(diffVector[0]), width / 2])
         y = np.sign(diffVector[1]) * min([abs(diffVector[1]), width / 2])
-        result: "np.ndarray[Any, Any]" = wirePos + np.array([x, y])
+        result: np.ndarray[Any, Any] = wirePos + np.array([x, y])
         return result
 
     ConnStart = []

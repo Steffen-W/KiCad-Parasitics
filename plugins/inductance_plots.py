@@ -1,17 +1,9 @@
-"""Interactive debug plots for calc_inductance.py (centerline, mesh, |B|-field).
+"""Interactive debug plots for calc_inductance.py (centerline, mesh, |B|-field)."""
 
-Split out from calc_inductance.py so the wx/matplotlib UI code doesn't sit
-next to the (independently testable) inductance numerics.
-"""
-
-try:
-    import matplotlib
-
-    matplotlib.use("WXAgg", force=True)
-except Exception:
-    pass
+from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
+
 import numpy as np
 import trimesh
 
@@ -19,16 +11,16 @@ if TYPE_CHECKING:
     import wx
 
 try:
-    from .pcb_types import WIRE, VIA
+    from .pcb_types import VIA, WIRE
 except ImportError:
-    from pcb_types import WIRE, VIA
+    from pcb_types import VIA, WIRE
 
 
 def _make_plot_frame_class() -> type:
     """Create PlotFrame class using wx (imported lazily)."""
     import wx
-    from matplotlib.backends.backend_wxagg import FigureCanvasWxAgg as FigureCanvas
     from matplotlib.backends.backend_wx import NavigationToolbar2Wx as NavToolbar
+    from matplotlib.backends.backend_wxagg import FigureCanvasWxAgg as FigureCanvas
 
     class PlotFrame(wx.Frame):
         """wx.Frame wrapper around a matplotlib Figure."""
@@ -55,7 +47,7 @@ def _make_plot_frame_class() -> type:
     return PlotFrame
 
 
-def _show_figure(fig: Any, title: str, parent: "wx.Window | None") -> None:
+def _show_figure(fig: Any, title: str, parent: wx.Window | None) -> None:
     """Display a Figure in a PlotFrame via wx.CallAfter (UI-thread safe)."""
     import wx
 
@@ -72,7 +64,7 @@ def _show_figure(fig: Any, title: str, parent: "wx.Window | None") -> None:
 def show_debug_plots(
     debug_data: dict[str, Any],
     segments: list[dict[str, Any]],
-    parent: "wx.Window | None" = None,
+    parent: wx.Window | None = None,
 ) -> None:
     """Show interactive debug plots for centerline and mesh.
 
@@ -82,11 +74,11 @@ def show_debug_plots(
     segments : list[dict] – segment descriptors
     parent : wx.Window or None – parent for plot frames (None for standalone)
     """
-    from matplotlib.figure import Figure
     import matplotlib
     import matplotlib.tri as mtri
-    from matplotlib.colors import Normalize, LogNorm
     from matplotlib.cm import ScalarMappable
+    from matplotlib.colors import LogNorm, Normalize
+    from matplotlib.figure import Figure
 
     layer_colors = {
         "F.Cu": "red",

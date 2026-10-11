@@ -1,10 +1,11 @@
 import logging
 import os
 from pathlib import Path
+
 import pcbnew
 
-from .Get_PCB_Elements import Get_PCB_Elements
-from .Get_PCB_Stackup import Get_PCB_Stackup_fun
+from .get_pcb_elements import Get_PCB_Elements
+from .get_pcb_stackup import Get_PCB_Stackup_fun
 from .parasitic import run_plugin
 
 if os.environ.get("PARASITIC_DEBUG"):
@@ -45,16 +46,12 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
     def Run(self) -> None:
         board = pcbnew.GetBoard()
         connect = board.GetConnectivity()
-        Settings = pcbnew.GetSettingsManager()
-
-        try:
-            new_v9 = int(str(Settings.GetSettingsVersion()).split(".")[0]) >= 9
-        except Exception:
-            new_v9 = True
-
         board_FileName = Path(board.GetFileName())
-        ItemList, _BoardThickness = Get_PCB_Elements(board, connect)
-        CuStack = Get_PCB_Stackup_fun(board_FileName, new_v9=new_v9)
+        ItemList, board_thickness = Get_PCB_Elements(board, connect)
+        # KiCad 9 renumbered the copper layers (B.Cu: 31 -> 2).
+        CuStack = Get_PCB_Stackup_fun(
+            board_FileName, new_v9=pcbnew.B_Cu == 2, board_thickness=board_thickness
+        )
 
         run_plugin(ItemList, CuStack)
 

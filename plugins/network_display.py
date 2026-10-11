@@ -1,12 +1,14 @@
 """Network visualization and formatting for the 'Network Details' dialog."""
 
+from __future__ import annotations
+
 from collections import deque
 from typing import Any
 
 try:
-    from .pcb_types import WIRE, VIA, ZONE, NetworkElement
+    from .pcb_types import VIA, WIRE, ZONE, NetworkElement
 except ImportError:
-    from pcb_types import WIRE, VIA, ZONE, NetworkElement
+    from pcb_types import VIA, WIRE, ZONE, NetworkElement
 
 
 def simplify_graph(
@@ -220,7 +222,7 @@ def render_network_ascii(
     # Common prefix length
     plen = 0
     for i in range(min(len(p) for p in all_paths)):
-        if len(set(p[i] for p in all_paths)) == 1:
+        if len({p[i] for p in all_paths}) == 1:
             plen = i + 1
         else:
             break
@@ -228,7 +230,7 @@ def render_network_ascii(
     # Common suffix length
     slen = 0
     for i in range(1, min(len(p) for p in all_paths) + 1):
-        if len(set(p[-i] for p in all_paths)) == 1:
+        if len({p[-i] for p in all_paths}) == 1:
             slen = i
         else:
             break
@@ -299,7 +301,7 @@ def render_network_ascii(
             while True:
                 sub_children = {k: v for k, v in sub.items() if k != "_leaf"}
                 if len(sub_children) == 1 and "_leaf" not in sub:
-                    nxt = list(sub_children.keys())[0]
+                    nxt = next(iter(sub_children))
                     chain.append(nxt)
                     sub = sub_children[nxt]
                 else:

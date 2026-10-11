@@ -1,38 +1,42 @@
+from __future__ import annotations
+
 import logging
 from collections.abc import Iterator
 from ctypes import c_char_p
+
 import numpy as np
+
 from .sharedspice import (
-    spice,
     captured_output,
+    controlled_exit,
     dvec_flags,
     printfcn,
-    statfcn,
-    controlled_exit,
     send_data,
+    spice,
+    statfcn,
 )
 
 __all__ = [
-    "cmd",
+    "ac",
+    "alter",
+    "alter_model",
+    "alterparams",
     "circ",
+    "cmd",
+    "dc",
+    "decibel",
+    "destroy",
+    "device_state",
+    "linear_sweep",
+    "model_parameters",
+    "operating_point",
     "plots",
+    "save",
+    "source",
+    "try_float",
+    "vector",
     "vector_names",
     "vectors",
-    "vector",
-    "try_float",
-    "model_parameters",
-    "device_state",
-    "alter_model",
-    "ac",
-    "dc",
-    "operating_point",
-    "linear_sweep",
-    "save",
-    "destroy",
-    "decibel",
-    "alter",
-    "alterparams",
-    "source",
     "xspice_enabled",
 ]
 
@@ -283,7 +287,7 @@ def vector(name: str, plot: str | None = None) -> np.ndarray:
         name = plot + "." + name
     vec = spice.ngGet_Vec_Info(name.encode("ascii"))
     if not vec:
-        raise RuntimeError("Vector {} not found".format(name))
+        raise RuntimeError(f"Vector {name} not found")
     vec = vec[0]
     if vec.v_length == 0:
         array = np.array([])
@@ -296,7 +300,7 @@ def vector(name: str, plot: str | None = None) -> np.ndarray:
         )
     else:
         raise RuntimeError("No valid data in vector")
-    logger.debug("Fetched vector {} type {}".format(name, vec.v_type))
+    logger.debug("Fetched vector %s type %s", name, vec.v_type)
     array.setflags(write=False)
     if name == "frequency":
         return np.real(array)
@@ -356,7 +360,7 @@ def model_parameters(
             lines = cmd("showmod " + device.lower())
         else:
             raise ValueError("Only specify one of device, model")
-    ret = dict(description=lines.pop(0))
+    ret = {"description": lines.pop(0)}
     ret.update({parts[0]: try_float(parts[1]) for parts in map(str.split, lines)})
     return ret
 
@@ -388,7 +392,7 @@ def device_state(device: str) -> dict[str, float | str]:
     """
     lines = cmd("show " + device.lower())
 
-    ret = dict(description=lines.pop(0))
+    ret = {"description": lines.pop(0)}
     ret.update({parts[0]: try_float(parts[1]) for parts in map(str.split, lines)})
     return ret
 
@@ -403,7 +407,7 @@ def alter_model(model: str, **params: float) -> None:
         Model card name
     """
     for k, v in params.items():
-        cmd("altermod {} {} = {:.6e}".format(model, k, v))
+        cmd(f"altermod {model} {k} = {v:.6e}")
 
 
 def ac(mode: str, npoints: int, fstart: float, fstop: float) -> dict[str, np.ndarray]:
@@ -456,12 +460,12 @@ def ac(mode: str, npoints: int, fstart: float, fstop: float) -> dict[str, np.nda
     """
     modes = ("dec", "lin", "oct")
     if mode.lower() not in modes:
-        raise ValueError("'{}' is not a valid AC sweep mode: {}".format(mode, modes))
+        raise ValueError(f"'{mode}' is not a valid AC sweep mode: {modes}")
     if fstop < fstart:
         raise ValueError(
             "Start frequency", fstart, "greater than stop frequency", fstop
         )
-    cmd("ac {} {} {} {}".format(mode, npoints, fstart, fstop))
+    cmd(f"ac {mode} {npoints} {fstart} {fstop}")
     return vectors()
 
 
@@ -582,12 +586,12 @@ def alter(device: str, **parameters: float | list | tuple) -> None:
             v = str(v)
         else:
             v = "[ " + " ".join(v) + " ]"
-        cmd("alter {} {} = {}".format(device.lower(), k, v))
+        cmd(f"alter {device.lower()} {k} = {v}")
 
 
 def alterparams(**kwargs: float) -> None:
     for k, v in kwargs.items():
-        cmd("alterparam {} = {}".format(k, v))
+        cmd(f"alterparam {k} = {v}")
     cmd("reset")
 
 
@@ -634,7 +638,7 @@ def source(filename: str) -> None:
     filename : str
         A file containing a circuit netlist.
     """
-    cmd("source '{}'".format(filename))
+    cmd(f"source '{filename}'")
 
 
 def xspice_enabled():

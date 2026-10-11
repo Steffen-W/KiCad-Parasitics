@@ -1,17 +1,17 @@
+import logging
 import os
 import platform
-import logging
 from ctypes import (
     CDLL,
     CFUNCTYPE,
-    Structure,
-    c_int,
-    c_char_p,
-    c_void_p,
-    c_bool,
-    c_double,
     POINTER,
+    Structure,
+    c_bool,
+    c_char_p,
+    c_double,
+    c_int,
     c_short,
+    c_void_p,
 )
 from ctypes.util import find_library
 
@@ -67,7 +67,6 @@ captured_output = []
 @CFUNCTYPE(c_int, c_char_p, c_int, c_void_p)
 def printfcn(output: bytes, _id: int, _ret: int) -> int:
     """Callback for libngspice to print a message"""
-    global captured_output
     prefix, _, content = output.decode("ascii").partition(" ")
     if prefix == "stderr":
         logger.error(content)
@@ -92,17 +91,18 @@ def controlled_exit(
     requested_exit: bool,
     libngspice_id: int,
     ret: int,
-) -> None:
+) -> int:
     logger.debug(
-        "ControlledExit",
-        dict(
-            exit_status=exit_status,
-            immediate_unloading=immediate_unloading,
-            requested_exit=requested_exit,
-            libngspice_id=libngspice_id,
-            ret=ret,
-        ),
+        "ControlledExit: %s",
+        {
+            "exit_status": exit_status,
+            "immediate_unloading": immediate_unloading,
+            "requested_exit": requested_exit,
+            "libngspice_id": libngspice_id,
+            "ret": ret,
+        },
     )
+    return 0
 
 
 # typedef struct vecvalues {
@@ -142,16 +142,17 @@ class vecvaluesall(Structure):
 @CFUNCTYPE(c_int, POINTER(vecvaluesall), c_int, c_int, c_void_p)
 def send_data(
     vecvaluesall_: vecvaluesall, num_structs: int, libngspice_id: int, ret: int
-) -> None:
+) -> int:
     logger.debug(
-        "SendData",
-        dict(
-            vecvaluesall=vecvaluesall_,
-            num_structs=num_structs,
-            libngspice_id=libngspice_id,
-            ret=ret,
-        ),
+        "SendData: %s",
+        {
+            "vecvaluesall": vecvaluesall_,
+            "num_structs": num_structs,
+            "libngspice_id": libngspice_id,
+            "ret": ret,
+        },
     )
+    return 0
 
 
 # int  ngSpice_Command(char* command);
@@ -189,7 +190,7 @@ class ngcomplex(Structure):
 # };
 
 
-class dvec_flags(object):
+class dvec_flags:
     vf_real = 1 << 0  # The data is real.
     vf_complex = 1 << 1  # The data is complex.
     vf_accum = 1 << 2  # writedata should save this vector.
@@ -259,7 +260,7 @@ vector_type = [
 # enum simulation_types {
 #   ...
 # };
-class simulation_type(object):
+class simulation_type:
     notype = 0
     time = 1
     frequency = 2

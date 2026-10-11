@@ -1,4 +1,4 @@
-"""Generate coil geometries as debug_ItemList.json for Plot_PCB.py."""
+"""Generate coil geometries as debug_ItemList.json for plot_pcb.py."""
 
 from __future__ import annotations
 
@@ -7,17 +7,14 @@ import json
 import math
 import os
 from dataclasses import dataclass, field
-from typing import Any, Callable, TypeAlias
+from typing import Any, Callable
 
-from Get_PCB_Elements_IPC import _arc_geometry, _arc_points, _outline_from_midline
-from pcb_types import WIRE, VIA, PAD, TOP_LAYER, BOTTOM_LAYER
-
+from get_pcb_elements_ipc import _arc_geometry, _arc_points, _outline_from_midline
+from pcb_types import BOTTOM_LAYER, PAD, TOP_LAYER, VIA, WIRE
 
 Item = dict[str, Any]
 NodeMap = dict[int, int]
-
-
-Pos2D: TypeAlias = tuple[float, float]
+Pos2D = tuple[float, float]
 
 
 @dataclass
@@ -166,15 +163,16 @@ def make_arc(
     """
     ctx = ctx if ctx is not None else new_context()
     start, end, mid = (x_start, y_start), (x_end, y_end), (x_mid, y_mid)
-    r_m, angle, arc_length, center, arc_sa = _arc_geometry(start, end, mid)
+    angle, arc_length, circle = _arc_geometry(start, end, mid)
 
     ns = node_start if node_start is not None else ctx.new_node()
     ne = node_end if node_end is not None else ctx.new_node()
 
     midline: list[Pos2D] = [start, end]
-    if r_m is not None and center is not None:
-        assert arc_sa is not None
-        midline = [start] + _arc_points(center, r_m, arc_sa, angle, width)
+    if circle is not None:
+        midline = [start] + _arc_points(
+            circle.center, circle.radius, circle.start_angle, angle, width
+        )
 
     item = _base_item(WIRE, layer, ctx)
     item.update(
@@ -182,7 +180,7 @@ def make_arc(
             "start": start,
             "end": end,
             "mid": mid,
-            "radius": r_m,
+            "radius": circle.radius if circle is not None else None,
             "angle": angle,
             "width": width,
             "length": arc_length,
@@ -250,7 +248,7 @@ def save_json(items: list[Item], path: str | None = None) -> str:
 
 
 def plot(items: list[Item]) -> None:
-    from Plot_PCB import plot_items
+    from plot_pcb import plot_items
 
     plot_items(items_to_dict(items))
 

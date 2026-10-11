@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+import logging
+import re
 from os.path import exists
 from pathlib import Path
 from typing import Any
@@ -12,7 +16,7 @@ try:
 except ImportError:
     from s_expression_parse import parse_sexp
 
-import re
+log = logging.getLogger(__name__)
 
 
 def extract_layer_from_string_old(input_string: str) -> int | None:  # kicad <9.0
@@ -104,7 +108,7 @@ def Get_PCB_Stackup_fun(
                 if Layer["cu_layer"] is not None:
                     t = float(Layer["thickness"]) / 1000  # mm → m
                     if t <= 0:
-                        raise Exception("Problematic layer thickness detected")
+                        raise ValueError(f"Non-positive thickness on {Layer['layer']}")
 
                     def _die_info(idx: int) -> DielectricInfo | None:
                         if 0 <= idx < len(layers):
@@ -141,15 +145,17 @@ def Get_PCB_Stackup_fun(
                         "gap": None,
                     }
     except Exception:
-        print("ERROR: Reading the CuStack")
+        log.exception("Reading the copper stackup from %s failed", ProjectPath)
+        CuStack = {}
 
     # Fallback: 2-layer board with default values
     if not CuStack:
         total = board_thickness if board_thickness else 1.6e-3  # 1.6 mm in m
         t_cu = 35e-6
         h_die = total - 2 * t_cu
-        print(
-            f"WARNING: No layer info found. Using 2-layer default: {total * 1000}mm, 35µm copper"
+        log.warning(
+            "No layer info found. Using 2-layer default: %gmm, 35µm copper",
+            total * 1000,
         )
         b_cu = 2 if new_v9 else 31
         die: DielectricInfo = {"h": h_die, "epsilon_r": 4.3, "loss_tangent": 0.02}

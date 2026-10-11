@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from math import atan, cosh, exp, isfinite, isnan, log, log1p, pi, sinh, sqrt, tanh
 from typing import Any
 

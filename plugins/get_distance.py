@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import heapq
 import math
 from collections import deque
@@ -34,7 +36,7 @@ def find_all_reachable_nodes(
     visited.add(start_node)
     while queue:
         current = queue.popleft()
-        for neighbor in graph[current].keys():
+        for neighbor in graph[current]:
             if neighbor not in visited:
                 visited.add(neighbor)
                 queue.append(neighbor)
@@ -82,7 +84,8 @@ def find_shortest_path(
     path = [end_node]
     while path[-1] != start_node:
         prev = predecessor[path[-1]]
-        assert prev is not None
+        if prev is None:
+            raise RuntimeError(f"Broken predecessor chain at node {path[-1]}")
         path.append(prev)
     return distance[end_node], path[::-1]
 
@@ -115,7 +118,7 @@ if __name__ == "__main__":
     try:
         distance, path = find_shortest_path(graph, start_node, end_node)
         print(
-            f"Shortest path {str(distance)} from {str(start_node)} to {str(end_node)}: {str(path)}"
+            f"Shortest path {distance!s} from {start_node!s} to {end_node!s}: {path!s}"
         )
     except ValueError as e:
         print(f"Error: {e}")

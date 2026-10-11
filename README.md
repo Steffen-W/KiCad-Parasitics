@@ -10,8 +10,14 @@ Plugin to analyze the wires in the PCB editor. To use the plugin, two points mus
 
 ## Development
 
+The minimum supported Python version is 3.9, the interpreter bundled with KiCad on macOS. Modules that use `X | Y` annotations therefore start with `from __future__ import annotations`, and runtime-evaluated type aliases use `typing.Union`.
+
+Before every nightly release, CI runs ruff (including rule FA102), mypy, vermin, a dry-run install of `plugins/requirements.txt` for Python 3.9 on macOS, and the tests under Python 3.9 and 3.12. The tests need libngspice (e.g. `apt install libngspice0`) and only part of the plugin dependencies:
+
 ```bash
-mypy . --strict
+pip install pytest numpy scipy kicad-python -c plugins/requirements.txt
+pytest
+mypy plugins
 ruff check --fix --unsafe-fixes && ruff format
 ```
 

@@ -8,16 +8,17 @@ network and computes the loop inductance of the trace path.
 import logging
 import math
 from typing import Any
+
 import numpy as np
 import trimesh
-from scipy.spatial import cKDTree
 from bfieldtools.mesh_impedance import self_inductance_matrix
 from bfieldtools.utils import find_mesh_boundaries
+from scipy.spatial import cKDTree
 
 try:
-    from .pcb_types import WIRE, VIA, NetworkElement, CuLayer
+    from .pcb_types import VIA, WIRE, CuLayer, NetworkElement
 except ImportError:
-    from pcb_types import WIRE, VIA, NetworkElement, CuLayer
+    from pcb_types import VIA, WIRE, CuLayer, NetworkElement
 
 log = logging.getLogger(__name__)
 
