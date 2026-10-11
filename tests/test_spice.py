@@ -29,7 +29,7 @@ def test_dc_matches_series_resistance(
     network = gp.extract_network(coil_data, cu_stack)
     _, _, short_path_res = gp.find_path(network, conn1, conn2)
 
-    r_dc, z_ac, zin1, zin2, _ = gp.simulate_network(
+    r_dc, z_ac, zin1, zin2 = gp.simulate_network(
         network, conn1, conn2, cu_stack, frequencies=[1e3], rload_far=50.0
     )
 

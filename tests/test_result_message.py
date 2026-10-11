@@ -99,5 +99,16 @@ def test_missing_ngspice_keeps_path_results(
     text = parasitic.format_result_message(result, cu_stack)
 
     assert result["short_path_resistance"] is not None
+    assert result["network_info"]
     assert "Shortest path resistance" in text
     assert "ngspice library could not be loaded" in text
+
+
+def test_zones_are_rejected_as_measurement_points(no_wx: None) -> None:
+    from parasitic import analyze_pcb_parasitic
+
+    zone = {"type": "ZONE", "layer": [0], "net_start": {}}
+    result = analyze_pcb_parasitic({}, {}, zone, dict(zone))
+
+    assert result["error"] is not None
+    assert "zones have no single connection point" in result["error"]

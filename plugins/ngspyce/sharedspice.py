@@ -47,8 +47,10 @@ if os.name == "nt":  # Windows
         spice = CDLL("ngspice")
     except OSError:
         os.chdir(os.path.join(spice_path, "bin_dll"))
-        spice = CDLL("ngspice")
-        os.chdir(curr_dir_before)
+        try:
+            spice = CDLL("ngspice")
+        finally:
+            os.chdir(curr_dir_before)
 else:  # Linux, etc.
     lib_location = os.environ.get("LIBNGSPICE") or find_library("ngspice")
 

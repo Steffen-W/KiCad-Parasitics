@@ -1,8 +1,5 @@
-import logging
 import re
 from typing import Any
-
-log = logging.getLogger(__name__)
 
 term_regex = r"""(?mx)
     \s*(?:
@@ -19,7 +16,6 @@ def parse_sexp(sexp: str) -> list[Any]:
     out: list[Any] = []
     for termtypes in re.finditer(term_regex, sexp):
         term, value = next((t, v) for t, v in termtypes.groupdict().items() if v)
-        log.debug("%-7s %-14s %-44r %-r", term, value, out, stack)
         if term == "brackl":
             stack.append(out)
             out = []

@@ -104,6 +104,7 @@ def test_via_and_pad_ends_mirror_their_start() -> None:
 
 def test_missing_position_does_not_connect() -> None:
     data = {"A": _wire((0, 0), (1, 0)), "B": _wire((5, 5), (6, 5))}
+    del data["A"]["start"]
     del data["B"]["start"]
     data["B"]["conn_start"].append("A")
 

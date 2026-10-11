@@ -233,7 +233,8 @@ class SpiceError(RuntimeError):
 
 
 # Failures of a single simulation: ngspice and ngspyce raise RuntimeError
-# (including SpiceError and SpiceTimeoutError) or ValueError, netlist I/O OSError.
+# (including SpiceError and SpiceTimeoutError) or ValueError; ctypes raises
+# OSError for native access violations on Windows.
 _SPICE_FAILURES = (RuntimeError, ValueError, OSError)
 
 
@@ -301,7 +302,7 @@ def _run_spice(
     far_node: int | None = None,
     rload_far: float | None = None,
 ) -> float | complex:
-    """Write netlist, run simulation, return impedance.
+    """Load the netlist into ngspice, run the simulation, return the impedance.
 
     Circuit topology
     ----------------
@@ -460,6 +461,9 @@ def RunSimulation(
     ) -> Impedance | None:
         try:
             return _run_spice(ngspyce, elements, port, ret, **kw)
+        except SpiceTimeoutError as e:
+            log.error("[SPICE] %s skipped: %s", label, e)
+            return None
         except _SPICE_FAILURES:
             log.exception("[SPICE] %s failed", label)
             return None
@@ -521,7 +525,7 @@ def RunSimulation(
                 R = elem["resistance"]
                 L = elem.get("inductance")
                 C = elem.get("capacitance")
-                # R-L in series, C parallel to ground planes
+                # R-L in series, C to the surrounding ground planes
                 if L:
                     mid = f"mid{idx}"
                     ac.append(("R", n1, mid, R))
@@ -529,7 +533,7 @@ def RunSimulation(
                 else:
                     ac.append(("R", n1, n2, R))
                 if C:
-                    ac.append(("C", n1, n2, C))
+                    ac.append(("C", n1, gnd, C))
 
             else:  # ZONE
                 R = elem["resistance"]
@@ -859,7 +863,6 @@ def simulate_network(
     dict[float, Impedance | None],
     dict[float, Impedance | None],
     dict[float, Impedance | None],
-    list[NetworkElement],
 ]:
     """Run DC simulation and optionally AC simulations with HF parameters.
 
@@ -876,8 +879,9 @@ def simulate_network(
             with this load resistance (in Ohm) at the far end
 
     Returns:
-        (resistance_dc, impedance_ac, z_ac_conn1, z_ac_conn2, network_info)
-        network_info is enriched with "hf" key for WIRE elements if frequencies given.
+        (resistance_dc, impedance_ac, z_ac_conn1, z_ac_conn2)
+        network["network_info"] is enriched in place with an "hf" key for WIRE
+        elements if frequencies are given.
         z_ac_conn1/z_ac_conn2 are empty dicts when rload_far is None.
         A failed simulation yields None (see RunSimulation).
     """
@@ -917,10 +921,7 @@ def simulate_network(
         if hf:
             elem["hf"] = hf
 
-    resistance_dc, impedance_ac, z_ac_conn1, z_ac_conn2 = RunSimulation(
-        resistors, conn1, conn2, network_info, frequencies, rload_far
-    )
-    return resistance_dc, impedance_ac, z_ac_conn1, z_ac_conn2, network_info
+    return RunSimulation(resistors, conn1, conn2, network_info, frequencies, rload_far)
 
 
 if __name__ == "__main__":

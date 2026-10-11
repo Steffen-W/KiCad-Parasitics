@@ -25,9 +25,9 @@ if venv:
 
 
 try:
-    from .connect_nets import Connect_Nets
+    from .connect_nets import NOT_ASSIGNED, Connect_Nets
 except ImportError:
-    from connect_nets import Connect_Nets
+    from connect_nets import NOT_ASSIGNED, Connect_Nets
 try:
     from .get_distance import find_all_reachable_nodes
 except ImportError:
@@ -158,12 +158,12 @@ def analyze_pcb_parasitic(
     best_conn = None
 
     for layer1 in element1.get("layer", []):
-        conn1 = element1["net_start"].get(layer1, 0)
-        if conn1 == 0:
+        conn1 = element1["net_start"].get(layer1, NOT_ASSIGNED)
+        if conn1 == NOT_ASSIGNED:
             continue
         for layer2 in element2.get("layer", []):
-            conn2 = element2["net_start"].get(layer2, 0)
-            if conn2 == 0:
+            conn2 = element2["net_start"].get(layer2, NOT_ASSIGNED)
+            if conn2 == NOT_ASSIGNED:
                 continue
 
             Distance, _, _ = find_path(network, conn1, conn2)
@@ -174,14 +174,20 @@ def analyze_pcb_parasitic(
 
     if not best_conn:
         best_conn = (
-            element1["net_start"][element1["layer"][0]],
-            element2["net_start"][element2["layer"][0]],
+            element1["net_start"].get(element1["layer"][0], NOT_ASSIGNED),
+            element2["net_start"].get(element2["layer"][0], NOT_ASSIGNED),
             element1["layer"][0],
             element2["layer"][0],
         )
 
     conn1, conn2 = best_conn[0], best_conn[1]
     result["conn1"], result["conn2"] = conn1, conn2
+    if NOT_ASSIGNED in (conn1, conn2):
+        result["error"] = (
+            "Select pads, vias or tracks as measurement points; "
+            "zones have no single connection point."
+        )
+        return result
     if conn1 == conn2:
         result["error"] = (
             "The selected elements touch each other directly, "
@@ -213,13 +219,14 @@ def analyze_pcb_parasitic(
             "distance": Distance,
             "short_path_resistance": short_path_RES,
             "area": network["area"],
+            "network_info": network["network_info"],
             "graph": network["graph"],
             "path": path,
         }
     )
 
     try:
-        Resistance, Z_ac, Z_ac_conn1, Z_ac_conn2, network_info = simulate_network(
+        Resistance, Z_ac, Z_ac_conn1, Z_ac_conn2 = simulate_network(
             network,
             conn1,
             conn2,
@@ -239,7 +246,6 @@ def analyze_pcb_parasitic(
             "impedance_ac_conn1": Z_ac_conn1,
             "impedance_ac_conn2": Z_ac_conn2,
             "zin_termination_ohm": _ZIN_TERMINATION_OHM,
-            "network_info": network_info,
         }
     )
     return result
@@ -389,6 +395,22 @@ def format_si(value: float, unit: str, precision: int = 3) -> str:
     return f"{value:.{precision}f} {unit}"
 
 
+def _orphan_on_top(parent: wx.Window | None) -> int:
+    """Window style keeping a parentless window above KiCad.
+
+    In the IPC plugin the window belongs to a separate process, and without a
+    parent the window manager may otherwise open it behind KiCad.
+    """
+    return wx.STAY_ON_TOP if parent is None else 0
+
+
+def _show_message(parent: wx.Window | None, text: str, caption: str, icon: int) -> None:
+    with wx.MessageDialog(
+        parent, text, caption, wx.OK | icon | _orphan_on_top(parent)
+    ) as dlg:
+        dlg.ShowModal()
+
+
 class ResultDialog(wx.Dialog):
     """Dialog to show analysis results with optional details."""
 
@@ -403,7 +425,7 @@ class ResultDialog(wx.Dialog):
         super().__init__(
             parent,
             title="Analysis result",
-            style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
+            style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER | _orphan_on_top(parent),
         )
         self.debug_text = debug_text
         self.analysis_result = analysis_result
@@ -477,10 +499,11 @@ class ResultDialog(wx.Dialog):
         result = self.analysis_result
         cu_stack = self.cu_stack
         if not result or cu_stack is None:
-            wx.MessageBox(
+            _show_message(
+                self,
                 "No analysis result is available to compute inductance from.",
                 "Inductance Calculation",
-                wx.OK | wx.ICON_INFORMATION,
+                wx.ICON_INFORMATION,
             )
             return
 
@@ -612,10 +635,11 @@ class ResultDialog(wx.Dialog):
             show_debug_plots(debug_data, segments, parent=None)
         except Exception as e:
             log.exception("Debug Plots failed")
-            wx.MessageBox(
+            _show_message(
+                self,
                 f"ERROR: could not show debug plots.\n\n{type(e).__name__}: {e}",
                 "Debug Plots",
-                wx.OK | wx.ICON_ERROR,
+                wx.ICON_ERROR,
             )
 
 
@@ -643,8 +667,7 @@ def _enable_crash_log() -> None:
             encoding="utf-8",
         )
     except OSError:
-        log.warning("crash.log not writable, native crashes go to stderr")
-        faulthandler.enable(all_threads=True)
+        log.warning("crash.log not writable, native crashes are not recorded")
         return
     faulthandler.enable(file=_crash_log, all_threads=True)
 
@@ -722,7 +745,7 @@ def run_plugin(
 
         log.info("Opening dialog")
         dlg = ResultDialog(
-            None,
+            wx.GetActiveWindow(),
             message,
             network_debug_text,
             analysis_result=analysis_result,
@@ -733,10 +756,9 @@ def run_plugin(
 
     except Exception:
         log.exception("Fatal error")
-        error_msg = traceback.format_exc()
-        wx.MessageDialog(
-            None, error_msg, "Fatal Error", wx.OK | wx.ICON_ERROR
-        ).ShowModal()
+        _show_message(
+            wx.GetActiveWindow(), traceback.format_exc(), "Fatal Error", wx.ICON_ERROR
+        )
 
 
 if __name__ == "__main__":
@@ -778,7 +800,9 @@ if __name__ == "__main__":
             board = kicad.get_board()
         except errors.ApiError:
             log.exception("Failed to get board")
-            print("Error: No PCB board found. Is a board open in KiCad?")
+            _show_message(
+                None, "No PCB is open in KiCad.", "Parasitics", wx.ICON_WARNING
+            )
             sys.exit(1)
         log.debug("Board: %s", board.document.board_filename)
 
@@ -791,10 +815,15 @@ if __name__ == "__main__":
         app.MainLoop()
     except errors.ConnectionError:
         log.exception("ConnectionError")
-        print("ConnectionError: Failed to connect to KiCad. Is KiCad running?")
+        _show_message(
+            None,
+            "Could not connect to KiCad. Is KiCad running with the API enabled?",
+            "Parasitics",
+            wx.ICON_ERROR,
+        )
     except SelectionError as e:
         log.warning("Invalid selection: %s", e)
-        wx.MessageBox(str(e), "Parasitics", wx.OK | wx.ICON_WARNING)
+        _show_message(None, str(e), "Parasitics", wx.ICON_WARNING)
     except Exception:
         log.exception("__main__")
-        wx.MessageBox(traceback.format_exc(), "Fatal Error", wx.OK | wx.ICON_ERROR)
+        _show_message(None, traceback.format_exc(), "Fatal Error", wx.ICON_ERROR)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from collections.abc import Iterable, Sequence
 from collections.abc import Set as AbstractSet
 from typing import Any, overload
@@ -178,6 +179,7 @@ def Get_PCB_Elements(
     BoardThickness = ToM(DesignSettings.GetBoardThickness())
 
     ItemList = {}
+    ignored: Counter[str] = Counter()
 
     for track in board.GetTracks():
         temp: dict[str, Any] = {"layer": getLayer(track, PossibleLayer)}
@@ -185,7 +187,6 @@ def Get_PCB_Elements(
             temp["type"] = VIA
             temp["position"] = ToM(track.GetStart())
             temp["drill"] = ToM(track.GetDrill())
-            temp["width"] = ToM(track.GetWidth())
             temp["conn_start"] = sorted(
                 getHashList(connect.GetConnectedPads(track))
                 + getHashList(connect.GetConnectedTracks(track))
@@ -205,7 +206,7 @@ def Get_PCB_Elements(
             if type(track) is pcbnew.PCB_ARC:
                 temp["radius"] = ToM(track.GetRadius())
         else:
-            log.warning("Unhandled track type: %s", type(track))
+            ignored[track.GetClass()] += 1
             continue
 
         temp["net_name"] = track.GetNetname()
@@ -254,7 +255,7 @@ def Get_PCB_Elements(
         elif type(item) is pcbnew.PCB_TRACK:
             continue  # already in board.GetTracks()
         else:
-            log.warning("Unhandled item type: %s", type(item))
+            ignored[item.GetClass()] += 1
             continue
 
         temp["net_name"] = item.GetNetname()
@@ -290,4 +291,6 @@ def Get_PCB_Elements(
                     if uuid not in item_data.get("conn_start", []):
                         item_data.setdefault("conn_start", []).append(uuid)
 
+    if ignored:
+        log.warning("Copper items not modelled: %s", dict(ignored))
     return ItemList, BoardThickness
