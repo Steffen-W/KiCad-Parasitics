@@ -2,22 +2,31 @@
 
 from __future__ import annotations
 
+import logging
 import math
+import multiprocessing
+import os
 import sys
-import threading
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 import get_parasitic as gp
+import spice_worker
+from analysis_progress import CancelledError, Stage
 from get_parasitic import Resistor
+from spice_worker import SpiceError, SpiceWorker
+
+R_ONLY: list[gp.SpiceElement] = [("R", 1, 2, 0.1)]
 
 
-def _assert_ngspice_released() -> None:
-    ngspyce = gp.load_ngspyce()
-    assert ngspyce.plots() == ["const"]
-    assert ngspyce.cmd("setcirc") == []
+@pytest.fixture
+def spice() -> Iterator[SpiceWorker]:
+    worker = SpiceWorker(lambda: None)
+    yield worker
+    worker.close()
 
 
 def test_dc_matches_series_resistance(
@@ -53,7 +62,7 @@ def test_failed_simulation_yields_none(monkeypatch: pytest.MonkeyPatch) -> None:
     assert (r_dc, z_ac, zin1, zin2) == (None, {1e3: None}, {1e3: None}, {1e3: None})
 
 
-def test_simulation_releases_ngspice_state() -> None:
+def test_single_wire_impedances() -> None:
     wire = {"type": "WIRE", "nodes": (1, 2), "resistance": 0.1, "length": 1e-3}
     r_dc, z_ac, zin1, _ = gp.RunSimulation(
         [Resistor(1, 2, 0.1, 1e-3)],
@@ -67,18 +76,20 @@ def test_simulation_releases_ngspice_state() -> None:
     assert r_dc == pytest.approx(0.1)
     assert z_ac[1e3] == pytest.approx(0.1)
     assert zin1[1e3] == pytest.approx(50.1)
-    _assert_ngspice_released()
 
 
-def test_failed_run_does_not_return_previous_result() -> None:
-    ngspyce = gp.load_ngspyce()
-    good = [("R", 1, 2, 0.1)]
-    floating = [("R", 1, 2, 0.1), ("R", 5, 6, 0.1)]
+def test_failed_run_does_not_return_previous_result(
+    spice: SpiceWorker, caplog: pytest.LogCaptureFixture
+) -> None:
+    floating = [*R_ONLY, ("R", 5, 6, 0.1)]
 
-    assert gp._run_spice(ngspyce, good, 1, 2, ac_freq=1e3) == pytest.approx(0.1)
-    with pytest.raises(gp.SpiceError):
-        gp._run_spice(ngspyce, floating, 1, 2, ac_freq=1e3)
-    _assert_ngspice_released()
+    assert gp._run_spice(spice, R_ONLY, 1, 2, ac_freq=1e3) == pytest.approx(0.1)
+    process = spice._child
+    with pytest.raises(SpiceError):
+        gp._run_spice(spice, floating, 1, 2, ac_freq=1e3)
+    assert any(r.name.startswith("ngspyce") for r in caplog.records)
+    assert spice._child is process
+    assert gp._run_spice(spice, R_ONLY, 1, 2, ac_freq=2e3) == pytest.approx(0.1)
 
 
 def test_unconnected_copper_is_not_simulated() -> None:
@@ -124,9 +135,9 @@ def test_self_loop_elements_are_not_simulated(monkeypatch: pytest.MonkeyPatch) -
     simulated: list[gp.SpiceElement] = []
     run_spice = gp._run_spice
 
-    def record(ngspyce: Any, elements: list[Any], *args: Any, **kw: Any) -> Any:
+    def record(spice: Any, elements: list[Any], *args: Any, **kw: Any) -> Any:
         simulated.extend(elements)
-        return run_spice(ngspyce, elements, *args, **kw)
+        return run_spice(spice, elements, *args, **kw)
 
     monkeypatch.setattr(gp, "_run_spice", record)
     loop = {"type": "VIA", "nodes": (2, 2), "resistance": 0.05, "length": 1e-3}
@@ -145,78 +156,156 @@ def test_self_loop_elements_are_not_simulated(monkeypatch: pytest.MonkeyPatch) -
     assert all(na != nb for _, na, nb, _ in simulated)
 
 
-def test_timed_out_call_blocks_further_calls(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(gp, "SPICE_TIMEOUT_S", 0.5)
-    monkeypatch.setattr(gp, "_timed_out_call", None)
-    release = threading.Event()
+def test_timed_out_worker_is_replaced(
+    spice: SpiceWorker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert gp._run_spice(spice, R_ONLY, 1, 2) == pytest.approx(0.1)
+    monkeypatch.setattr(spice_worker, "SPICE_TIMEOUT_S", 0.0)
+    with pytest.raises(SpiceError, match="did not answer"):
+        gp._run_spice(spice, R_ONLY, 1, 2)
 
-    try:
-        with pytest.raises(gp.SpiceTimeoutError, match="did not return"):
-            gp._run_native_spice_call(release.wait)
-        with pytest.raises(gp.SpiceTimeoutError, match="still blocked"):
-            gp._run_native_spice_call(lambda: None)
-    finally:
-        release.set()
+    monkeypatch.undo()
+    assert gp._run_spice(spice, R_ONLY, 1, 2) == pytest.approx(0.1)
 
-    assert gp._timed_out_call is not None
-    gp._timed_out_call.join()
-    gp._run_native_spice_call(lambda: None)
+
+def test_dead_worker_is_replaced(spice: SpiceWorker) -> None:
+    assert gp._run_spice(spice, R_ONLY, 1, 2) == pytest.approx(0.1)
+    assert spice._child is not None
+    process, _ = spice._child
+    process.kill()
+    process.join()
+
+    with pytest.raises(SpiceError, match="exited unexpectedly"):
+        gp._run_spice(spice, R_ONLY, 1, 2)
+    assert gp._run_spice(spice, R_ONLY, 1, 2) == pytest.approx(0.1)
 
 
 def test_missing_library_raises_user_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in [m for m in sys.modules if m == "ngspyce" or m.startswith("ngspyce.")]:
-        monkeypatch.delitem(sys.modules, name)
     monkeypatch.setenv("LIBNGSPICE", "/nonexistent/libngspice.so")
 
-    with pytest.raises(gp.SpiceUnavailableError, match="LIBNGSPICE"):
-        gp.load_ngspyce()
+    with pytest.raises(spice_worker.SpiceUnavailableError, match="LIBNGSPICE"):
+        gp.RunSimulation([Resistor(1, 2, 0.1, 1e-3)], 1, 2)
 
 
-@pytest.fixture
-def ngspice_reset() -> Iterator[None]:
-    """Unload every circuit and plot a test leaves behind."""
-    yield
-    ngspyce = gp.load_ngspyce()
-    ngspyce.cmd("destroy all")
-    while ngspyce.cmd("setcirc"):
-        ngspyce.cmd("remcirc")
+def test_progress_counts_every_simulation() -> None:
+    reported: list[tuple[int, int]] = []
+
+    def progress(stage: str, finished: int, total: int) -> bool:
+        if stage is Stage.SPICE:
+            reported.append((finished, total))
+        return True
+
+    wire = {"type": "WIRE", "nodes": (1, 2), "resistance": 0.1, "length": 1e-3}
+    gp.RunSimulation(
+        [Resistor(1, 2, 0.1, 1e-3)],
+        1,
+        2,
+        network_info=[wire],
+        frequencies=[1e3, 1e6],
+        rload_far=50.0,
+        progress=progress,
+    )
+
+    distinct = [r for i, r in enumerate(reported) if i == 0 or r != reported[i - 1]]
+    assert distinct == [(finished, 7) for finished in range(7)]
 
 
-def test_rejected_netlist_is_a_failed_simulation(
+def test_cancelled_progress_aborts_the_run() -> None:
+    with pytest.raises(CancelledError):
+        gp.RunSimulation([Resistor(1, 2, 0.1, 1e-3)], 1, 2, progress=lambda *_: False)
+
+
+def test_unpicklable_child_error_keeps_its_message() -> None:
+    class Local(Exception):
+        pass
+
+    error = spice_worker._transferable(Local("details"))
+
+    assert isinstance(error, SpiceError)
+    assert "details" in str(error)
+
+
+def test_ac_elements_skip_non_conducting_elements() -> None:
+    wire = {"type": "WIRE", "nodes": (1, 2), "resistance": 0.1, "length": 1e-3}
+    island = {"type": "ZONE", "nodes": (5, 6), "resistance": 0.2}
+
+    elements = gp._ac_elements([wire, island], 1e3, lambda n1, _n2: n1 == 1)
+
+    assert elements == [("R", 1, 2, 0.1)]
+
+
+def test_embedded_interpreter_is_derived_from_prefix(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(sys, "executable", "/usr/bin/kicad")
+    monkeypatch.setattr(sys, "exec_prefix", str(tmp_path))
+    with pytest.raises(spice_worker.SpiceUnavailableError, match="IPC"):
+        spice_worker._python_interpreter()
+
+    interpreter = tmp_path / ("python.exe" if os.name == "nt" else "bin/python3")
+    interpreter.parent.mkdir(exist_ok=True)
+    interpreter.touch(mode=0o644)
+    if os.name != "nt":
+        with pytest.raises(spice_worker.SpiceUnavailableError):
+            spice_worker._python_interpreter()
+        interpreter.chmod(0o755)
+    assert spice_worker._python_interpreter() == str(interpreter)
+
+
+def test_unstartable_interpreter_is_unavailable(
+    spice: SpiceWorker, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        spice_worker, "_python_interpreter", lambda: str(tmp_path / "missing")
+    )
+
+    with pytest.raises(
+        spice_worker.SpiceUnavailableError, match="could not be started"
+    ):
+        gp._run_spice(spice, R_ONLY, 1, 2)
+
+
+def test_unload_frees_circuit_and_results() -> None:
+    ngspyce = spice_worker._load_ngspyce()
+    netlist = ["R1 1 0 2", "Vmeas 1 0 dc 1", ".dc Vmeas 1 1 1"]
+
+    assert spice_worker._measure(ngspyce, netlist, "vmeas#branch") == pytest.approx(
+        -0.5
+    )
+    spice_worker._unload(ngspyce)
+    assert ngspyce.plots() == ["const"]
+    assert ngspyce.cmd("setcirc") == []
+
+
+def test_hanging_start_is_unavailable(
+    spice: SpiceWorker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(spice_worker, "SPICE_TIMEOUT_S", 0.0)
+
+    with pytest.raises(spice_worker.SpiceUnavailableError, match="did not answer"):
+        gp._run_spice(spice, R_ONLY, 1, 2)
+
+
+def test_failed_unload_ends_the_process_without_reply(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    ngspyce = gp.load_ngspyce()
-    monkeypatch.setattr(ngspyce, "circ", lambda _lines: 1)
+    class BrokenNgspyce:
+        def plots(self) -> list[str]:
+            return ["const"]
 
-    with pytest.raises(gp.SpiceError, match="rejected"):
-        gp._run_spice(ngspyce, [("R", 1, 2, 0.1)], 1, 2)
+        def circ(self, _netlist: list[str]) -> int:
+            return 1
 
-    monkeypatch.undo()
-    assert gp._run_spice(ngspyce, [("R", 1, 2, 0.1)], 1, 2) == pytest.approx(0.1)
-    _assert_ngspice_released()
+        def cmd(self, command: str) -> list[str]:
+            raise OSError(f"{command} failed")
 
+    monkeypatch.setattr(spice_worker, "_load_ngspyce", BrokenNgspyce)
+    monkeypatch.setattr(logging.getLogger(), "handlers", [])
+    parent, child = multiprocessing.Pipe()
+    parent.send((["R1 1 0 1"], "v"))
 
-@pytest.mark.parametrize("failing_command", ["destroy all", "remcirc"])
-@pytest.mark.usefixtures("ngspice_reset")
-def test_failed_cleanup_keeps_result_and_original_error(
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-    failing_command: str,
-) -> None:
-    ngspyce = gp.load_ngspyce()
-    cmd = ngspyce.cmd
+    with pytest.raises(OSError, match="destroy all failed"):
+        spice_worker._serve(child)
 
-    def failing_cmd(command: str) -> Any:
-        if command == failing_command:
-            raise RuntimeError("cleanup failed")
-        return cmd(command)
-
-    monkeypatch.setattr(ngspyce, "cmd", failing_cmd)
-
-    assert gp._run_spice(ngspyce, [("R", 1, 2, 0.1)], 1, 2) == pytest.approx(0.1)
-    with pytest.raises(gp.SpiceError, match="Implausible"):
-        gp._run_spice(ngspyce, [("R", 1, 2, -0.1)], 1, 2)
-    assert "Could not release ngspice state" in caplog.text
-
-    monkeypatch.undo()
-    assert gp._run_spice(ngspyce, [("R", 1, 2, 0.2)], 1, 2) == pytest.approx(0.2)
+    assert parent.recv() == (None, [])
+    assert not parent.poll()

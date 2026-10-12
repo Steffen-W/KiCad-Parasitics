@@ -6,6 +6,8 @@ from typing import Any
 
 import pytest
 
+from analysis_progress import CancelledError, Stage
+
 
 @pytest.fixture
 def format_result_message(no_wx: None) -> Any:
@@ -87,7 +89,7 @@ def test_missing_ngspice_keeps_path_results(
     cu_stack: dict[int, Any],
 ) -> None:
     import parasitic
-    from get_parasitic import SpiceUnavailableError
+    from spice_worker import SpiceUnavailableError
 
     def unavailable(*_args: Any, **_kwargs: Any) -> None:
         raise SpiceUnavailableError("ngspice library could not be loaded")
@@ -112,3 +114,45 @@ def test_zones_are_rejected_as_measurement_points(no_wx: None) -> None:
 
     assert result["error"] is not None
     assert "zones have no single connection point" in result["error"]
+
+
+@pytest.mark.parametrize("cancel_stage", list(Stage))
+def test_cancel_ends_the_analysis(
+    no_wx: None,
+    coil_data: dict[Any, dict[str, Any]],
+    cu_stack: dict[int, Any],
+    cancel_stage: Stage,
+) -> None:
+    import parasitic
+
+    wires = [d for d in coil_data.values() if d["type"] == "WIRE"]
+
+    with pytest.raises(CancelledError):
+        parasitic.analyze_pcb_parasitic(
+            coil_data,
+            cu_stack,
+            wires[0],
+            wires[-1],
+            progress=lambda stage, _finished, _total: stage != cancel_stage,
+        )
+
+
+def test_dialog_progress_shows_every_new_stage(no_wx: None) -> None:
+    import parasitic
+
+    shown: list[str] = []
+
+    class Dialog:
+        def Update(self, _value: int, message: str) -> tuple[bool, bool]:
+            shown.append(message)
+            return True, False
+
+    update = parasitic._dialog_progress(Dialog())
+    update(Stage.EXTRACT, 0, 2)
+    update(Stage.EXTRACT, 1, 2)
+    update(Stage.PATH, 0, 1)
+
+    assert shown == [
+        "Step 1 of 4: Extracting network (0 of 2 done)",
+        "Step 2 of 4: Finding path (0 of 1 done)",
+    ]

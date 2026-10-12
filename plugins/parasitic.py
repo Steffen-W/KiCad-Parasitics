@@ -7,6 +7,7 @@ import math
 import os
 import re
 import sys
+import time
 import traceback
 import warnings
 from typing import Any, TextIO
@@ -34,18 +35,34 @@ except ImportError:
     from get_distance import find_all_reachable_nodes
 try:
     from .get_parasitic import (
-        SpiceUnavailableError,
         extract_network,
         find_path,
         simulate_network,
     )
 except ImportError:
     from get_parasitic import (
-        SpiceUnavailableError,
         extract_network,
         find_path,
         simulate_network,
     )
+try:
+    from .analysis_progress import (
+        CancelledError,
+        Progress,
+        Stage,
+        no_progress,
+        report,
+    )
+    from .spice_worker import SpiceUnavailableError
+except ImportError:
+    from analysis_progress import (
+        CancelledError,
+        Progress,
+        Stage,
+        no_progress,
+        report,
+    )
+    from spice_worker import SpiceUnavailableError
 try:
     from .network_display import format_network_info
 except ImportError:
@@ -59,6 +76,8 @@ log = logging.getLogger(__name__)
 
 # far-end termination for single-ended Zin measurement
 _ZIN_TERMINATION_OHM: float = 50.0
+
+_PROGRESS_REFRESH_S = 0.1
 
 
 def _build_path_error(
@@ -121,6 +140,7 @@ def analyze_pcb_parasitic(
     element1: dict[str, Any],
     element2: dict[str, Any],
     frequencies: list[float] | None = None,
+    progress: Progress = no_progress,
 ) -> dict[str, Any]:
     """Analyze parasitic resistance/impedance between two PCB elements.
 
@@ -129,11 +149,14 @@ def analyze_pcb_parasitic(
         CuStack: Copper stackup from Get_PCB_Stackup_fun()
         element1, element2: Selected element dicts
         frequencies: List of frequencies for AC analysis (Hz)
+        progress: reports each analysis stage; see Progress
 
     Returns:
         dict with: resistance_dc, impedance_ac, distance, short_path_resistance,
                    area, network_info, graph, path, conn1, conn2, error,
-                   spice_unavailable (message when libngspice cannot be loaded)
+                   spice_unavailable (message when ngspice cannot be started)
+    Raises:
+        CancelledError: `progress` asked to stop
     """
     result: dict[str, Any] = {
         "resistance_dc": None,
@@ -150,27 +173,8 @@ def analyze_pcb_parasitic(
         "spice_unavailable": None,
     }
 
-    # Extract network ONCE (DC only, no HF calculation)
-    network = extract_network(data, CuStack)
-
-    # Find best path across all layer combinations (fast, no simulation)
-    best_distance = float("inf")
-    best_conn = None
-
-    for layer1 in element1.get("layer", []):
-        conn1 = element1["net_start"].get(layer1, NOT_ASSIGNED)
-        if conn1 == NOT_ASSIGNED:
-            continue
-        for layer2 in element2.get("layer", []):
-            conn2 = element2["net_start"].get(layer2, NOT_ASSIGNED)
-            if conn2 == NOT_ASSIGNED:
-                continue
-
-            Distance, _, _ = find_path(network, conn1, conn2)
-
-            if not math.isinf(Distance) and Distance < best_distance:
-                best_distance = Distance
-                best_conn = (conn1, conn2, layer1, layer2)
+    network = extract_network(data, CuStack, progress=progress)
+    best_distance, best_conn = _best_connection(network, element1, element2, progress)
 
     if not best_conn:
         best_conn = (
@@ -233,6 +237,7 @@ def analyze_pcb_parasitic(
             CuStack,
             frequencies=frequencies,
             rload_far=_ZIN_TERMINATION_OHM,
+            progress=progress,
         )
     except SpiceUnavailableError as e:
         log.error("%s", e)
@@ -249,6 +254,37 @@ def analyze_pcb_parasitic(
         }
     )
     return result
+
+
+def _best_connection(
+    network: dict[str, Any],
+    element1: dict[str, Any],
+    element2: dict[str, Any],
+    progress: Progress,
+) -> tuple[float, tuple[int, int, int, int] | None]:
+    """Shortest path over all layer combinations of the two elements.
+
+    Returns:
+        (distance, (conn1, conn2, layer1, layer2)); (inf, None) if none connects
+    """
+    layer_pairs = [
+        (layer1, layer2)
+        for layer1 in element1.get("layer", [])
+        for layer2 in element2.get("layer", [])
+    ]
+    best_distance = float("inf")
+    best_conn = None
+    for finished, (layer1, layer2) in enumerate(layer_pairs):
+        report(progress, Stage.PATH, finished, len(layer_pairs))
+        conn1 = element1["net_start"].get(layer1, NOT_ASSIGNED)
+        conn2 = element2["net_start"].get(layer2, NOT_ASSIGNED)
+        if NOT_ASSIGNED in (conn1, conn2):
+            continue
+        distance, _, _ = find_path(network, conn1, conn2)
+        if distance < best_distance:
+            best_distance = distance
+            best_conn = (conn1, conn2, layer1, layer2)
+    return best_distance, best_conn
 
 
 def format_result_message(
@@ -402,6 +438,31 @@ def _orphan_on_top(parent: wx.Window | None) -> int:
     parent the window manager may otherwise open it behind KiCad.
     """
     return wx.STAY_ON_TOP if parent is None else 0
+
+
+def _dialog_progress(dialog: wx.ProgressDialog) -> Progress:
+    """Progress that shows each stage as its own step in `dialog`. Within a
+    stage it refreshes at most every _PROGRESS_REFRESH_S so per-element reports
+    stay cheap; a new stage is always shown."""
+    shown: Stage | None = None
+    refreshed = -math.inf
+    keep_going = True
+
+    stages = list(Stage)
+
+    def update(stage: Stage, finished: int, total: int) -> bool:
+        nonlocal shown, refreshed, keep_going
+        now = time.monotonic()
+        if stage is not shown or now - refreshed >= _PROGRESS_REFRESH_S:
+            shown, refreshed = stage, now
+            step = f"Step {stages.index(stage) + 1} of {len(stages)}"
+            keep_going, _skip = dialog.Update(
+                100 * finished // total,
+                f"{step}: {stage.value} ({finished} of {total} done)",
+            )
+        return bool(keep_going)
+
+    return update
 
 
 def _show_message(parent: wx.Window | None, text: str, caption: str, icon: int) -> None:
@@ -700,13 +761,28 @@ def run_plugin(
             network_debug_text = None
         else:
             frequencies = [1e3, 10e3, 100e3, 1e6, 10e6, 100e6, 1e9]
-            result = analyze_pcb_parasitic(
-                data,
-                CuStack,
-                Selected[0],
-                Selected[1],
-                frequencies=frequencies,
-            )
+            parent = wx.GetActiveWindow()
+            with wx.ProgressDialog(
+                "Parasitics",
+                "Analyzing network…",
+                parent=parent,
+                style=wx.PD_APP_MODAL | wx.PD_CAN_ABORT | wx.PD_ELAPSED_TIME,
+            ) as busy:
+                busy.SetWindowStyleFlag(
+                    busy.GetWindowStyleFlag() | _orphan_on_top(parent)
+                )
+                try:
+                    result = analyze_pcb_parasitic(
+                        data,
+                        CuStack,
+                        Selected[0],
+                        Selected[1],
+                        frequencies=frequencies,
+                        progress=_dialog_progress(busy),
+                    )
+                except CancelledError:
+                    log.info("Analysis cancelled")
+                    return
 
             # Save debug info
             if result["network_info"] and log.isEnabledFor(logging.INFO):

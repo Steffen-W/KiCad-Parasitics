@@ -1,4 +1,4 @@
-![Static Badge](https://img.shields.io/badge/Supports_KiCad-v8%2C_v9-%23314cb0)
+![Static Badge](https://img.shields.io/badge/Supports_KiCad-v9%2B-%23314cb0)
 ![Static Badge](https://img.shields.io/badge/Supports-Windows%2C_Mac%2C_Linux-Green)
 
 [![GitHub Release](https://img.shields.io/github/release/Steffen-W/KiCad-Parasitics.svg)](https://github.com/Steffen-W/KiCad-Parasitics/releases/latest)
@@ -23,7 +23,7 @@ ruff check --fix --unsafe-fixes && ruff format
 
 ## API Support
 
-- **pcbnew API** (KiCad 7–9): The classic scripting API, runs as a KiCad plugin inside the PCB editor.
+- **pcbnew API** (KiCad 9+, deprecated by KiCad): The classic scripting API, runs as a KiCad plugin inside the PCB editor.
 - **IPC API** (KiCad 9+): The new KiCad IPC API via [kipy](https://docs.kicad.org/kicad-python-main/). Can also be started externally outside of KiCad (e.g. from the command line) while KiCad is running:
   ```bash
   git clone https://github.com/Steffen-W/KiCad-Parasitics.git
@@ -141,9 +141,8 @@ Operating systems
 - [x] Mac
 
 KiCad versions
-- [x] KiCad 8
 - [x] KiCad 9
-- [] KiCad 10
+- [x] KiCad 10
 
 # Feedback & Support
 

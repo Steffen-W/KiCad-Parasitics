@@ -3,21 +3,19 @@ from __future__ import annotations
 import cmath
 import logging
 import math
-import threading
 from collections import defaultdict
-from types import ModuleType
-from typing import Any, NamedTuple, Union
+from contextlib import closing
+from typing import Any, Callable, NamedTuple, Union
 
 import numpy as np
-
-# Wall-clock budget for a single native ngspice call (see _run_native_spice_call).
-SPICE_TIMEOUT_S = 30.0
 
 # Resistance tying each port node to GND. It must stay far above any port
 # impedance (loading error < 1e-7 at 50 Ω) yet close enough to milliohm trace
 # resistances for a well-conditioned matrix; 1e15 Ω made the DC operating point
 # fail with "singular matrix".
 _RREF_OHM = 1e9
+
+_GND = 0
 
 
 Impedance = Union[float, complex]
@@ -33,6 +31,7 @@ class Resistor(NamedTuple):
 
 
 try:
+    from .analysis_progress import Progress, Stage, no_progress, report
     from .get_distance import (
         find_all_reachable_nodes,
         find_shortest_path,
@@ -55,7 +54,9 @@ try:
         NetworkElement,
         SpiceElement,
     )
+    from .spice_worker import SpiceError, SpiceWorker
 except ImportError:
+    from analysis_progress import Progress, Stage, no_progress, report
     from get_distance import (
         find_all_reachable_nodes,
         find_shortest_path,
@@ -78,6 +79,7 @@ except ImportError:
         NetworkElement,
         SpiceElement,
     )
+    from spice_worker import SpiceError, SpiceWorker
 
 log = logging.getLogger(__name__)
 
@@ -208,101 +210,22 @@ def analyze_trace(
     }
 
 
-class SpiceUnavailableError(RuntimeError):
-    """Raised when libngspice cannot be loaded; the message addresses the user."""
-
-
-def load_ngspyce() -> ModuleType:
-    """Import ngspyce, which loads libngspice on first import."""
-    try:
-        try:
-            from . import ngspyce
-        except ImportError:
-            import ngspyce
-    except OSError as e:
-        raise SpiceUnavailableError(
-            f"The ngspice library could not be loaded ({e}).\n\n"
-            "Install ngspice (macOS: brew install libngspice) or set the "
-            "LIBNGSPICE environment variable to the library path."
-        ) from e
-    return ngspyce
-
-
-class SpiceError(RuntimeError):
-    """Raised when an ngspice simulation produces no usable result."""
-
-
-# Failures of a single simulation: ngspice and ngspyce raise RuntimeError
-# (including SpiceError and SpiceTimeoutError) or ValueError; ctypes raises
-# OSError for native access violations on Windows.
+# Failures of a single simulation: SpiceError (including a timeout or a dead
+# ngspice process), ValueError for invalid elements, and the RuntimeError or
+# OSError that ngspyce and ctypes raise in the ngspice process.
 _SPICE_FAILURES = (RuntimeError, ValueError, OSError)
 
 
-class SpiceTimeoutError(RuntimeError):
-    """Raised when ngspice exceeds SPICE_TIMEOUT_S or is still blocked by such a call."""
-
-
-# Native call that exceeded SPICE_TIMEOUT_S and may still be running.
-_timed_out_call: threading.Thread | None = None
-
-
-def _run_native_spice_call(fn: Any, *args: Any) -> Any:
-    """Run a native ngspyce call with a wall-clock timeout.
-
-    ngspice runs in-process via ctypes and a non-convergent circuit can block
-    indefinitely. The call runs in a daemon thread so the caller (typically the
-    GUI thread) stops waiting after SPICE_TIMEOUT_S. The native call itself
-    cannot be killed; until it returns, further calls are rejected because
-    ngspice keeps global state and is not reentrant.
-    """
-    global _timed_out_call
-    if _timed_out_call is not None and _timed_out_call.is_alive():
-        raise SpiceTimeoutError("ngspice is still blocked by a timed-out call")
-
-    result: list[Any] = []
-    error: list[BaseException] = []
-
-    def _target() -> None:
-        try:
-            result.append(fn(*args))
-        except BaseException as e:  # noqa: BLE001 - re-raised in caller thread
-            error.append(e)
-
-    thread = threading.Thread(target=_target, daemon=True)
-    thread.start()
-    thread.join(SPICE_TIMEOUT_S)
-    if thread.is_alive():
-        _timed_out_call = thread
-        raise SpiceTimeoutError(
-            f"ngspice call did not return within {SPICE_TIMEOUT_S:.0f}s "
-            "(likely non-convergent or pathological circuit)"
-        )
-    if error:
-        raise error[0]
-    return result[0]
-
-
-def _release_ngspice(ngspyce: ModuleType) -> None:
-    """Unload the current circuit and all result plots; failures are only logged."""
-    if _timed_out_call is not None and _timed_out_call.is_alive():
-        return
-    try:
-        _run_native_spice_call(ngspyce.cmd, "destroy all")
-        _run_native_spice_call(ngspyce.cmd, "remcirc")
-    except _SPICE_FAILURES:
-        log.warning("[SPICE] Could not release ngspice state", exc_info=True)
-
-
 def _run_spice(
-    ngspyce: ModuleType,
+    spice: SpiceWorker,
     elements: list[SpiceElement],
     conn1: int,
     conn2: int,
     ac_freq: float | None = None,
     far_node: int | None = None,
     rload_far: float | None = None,
-) -> float | complex:
-    """Load the netlist into ngspice, run the simulation, return the impedance.
+) -> complex:
+    """Simulate the DUT between conn1 and conn2 and return its port impedance.
 
     Circuit topology
     ----------------
@@ -342,12 +265,10 @@ def _run_spice(
             Rload to GND; port return is GND instead of conn2
         rload_far: load resistance in Ohm placed from far_node to GND
     Returns:
-        For DC: real resistance in Ohm (float)
-        For AC: complex impedance in Ohm (complex)
+        Impedance in Ohm; for DC the imaginary part is zero.
     Raises:
-        SpiceError: rejected netlist, no new result plot, no finite impedance,
-            or a non-positive DC resistance
-        SpiceTimeoutError: ngspice did not return in time or is still blocked
+        SpiceError: ngspice failed (see SpiceWorker.measure), no finite
+            impedance, or a non-positive DC resistance
         ValueError: non-finite element value or invalid rload_far
     """
     if rload_far is not None and not (math.isfinite(rload_far) and rload_far > 0):
@@ -372,6 +293,8 @@ def _run_spice(
         lines.append(f"Rref2 {conn2} 0 {_RREF_OHM:g}")
     if ac_freq:
         lines.append(f".ac lin 1 {ac_freq} {ac_freq}")
+    else:
+        lines.append(".dc v1 1 1 1")
 
     se_tag = " SE" if far_node is not None else ""
     mode = f"AC{se_tag} @ {ac_freq:.0f} Hz" if ac_freq else "DC"
@@ -380,43 +303,90 @@ def _run_spice(
     )
     log.debug("[SPICE] netlist:\n%s", "\n".join(lines))
 
-    plots_before = set(_run_native_spice_call(ngspyce.plots))
-    try:
-        if _run_native_spice_call(ngspyce.circ, lines) != 0:
-            raise SpiceError("ngspice rejected the netlist")
-        if ac_freq:
-            _run_native_spice_call(ngspyce.cmd, "run")
-        else:
-            _run_native_spice_call(ngspyce.dc, "v1", 1, 1, 1)
-        new_plots = set(_run_native_spice_call(ngspyce.plots)) - plots_before
-        if len(new_plots) != 1:
-            raise SpiceError(f"Expected one new result plot, got {sorted(new_plots)}")
-        # Copy: the vector points into ngspice memory that _release_ngspice frees.
-        i_meas = ngspyce.vector("vmeas#branch", new_plots.pop()).copy()
-    finally:
-        _release_ngspice(ngspyce)
-    log.info("[SPICE] done")
-
-    if len(i_meas) == 0 or i_meas[0] == 0 or not cmath.isfinite(i_meas[0]):
+    i_meas = spice.measure(lines, "vmeas#branch")
+    if i_meas == 0 or not cmath.isfinite(i_meas):
         raise SpiceError(f"No finite port current (I={i_meas})")
-    z: float | complex = -1.0 / i_meas[0]
+    z = -1.0 / i_meas
     if not cmath.isfinite(z) or (not ac_freq and z.real <= 0):
         raise SpiceError(f"Implausible port impedance {z}")
-    if ac_freq and isinstance(z, complex):
+    if ac_freq:
         # S11 with Z0=50 Ω reference — informational only, not returned
         z0_ref = 50.0
         s11 = (z - z0_ref) / (z + z0_ref)
         log.info(
             "[SPICE]   I=%s, Z=%.3f mΩ (%.3f + j%.3f mΩ)  S11=%.2f dB",
-            f"{i_meas[0]:.6e}",
+            f"{i_meas:.6e}",
             abs(z) * 1000,
             z.real * 1000,
             z.imag * 1000,
             20 * math.log10(abs(s11) + 1e-15),
         )
     else:
-        log.info("[SPICE]   I=%s, Z=%.3f mOhm", f"{i_meas[0]:.6e}", abs(z) * 1000)
+        log.info("[SPICE]   I=%s, Z=%.3f mOhm", f"{i_meas:.6e}", abs(z) * 1000)
     return z
+
+
+def _ac_elements(
+    network_info: list[NetworkElement],
+    freq: float,
+    conducts: Callable[[int, int], bool],
+) -> list[SpiceElement]:
+    """RLC netlist elements of the network at `freq`, skipping non-conducting ones."""
+    ac: list[SpiceElement] = []
+    for idx, elem in enumerate(network_info, start=1):
+        n1, n2 = elem["nodes"]
+        if not conducts(n1, n2):
+            continue
+
+        if elem["type"] == WIRE:
+            hf = elem.get("hf", {}).get(freq)
+            R = hf["r_ac"] if hf else elem["resistance"]
+            L = hf.get("inductance") if hf else None
+            C = hf.get("capacitance") if hf else None
+
+            # Segment if > lambda/20
+            wr = hf.get("wavelength_ratio") if hf else None
+            n_seg = max(1, int(wr / 0.05) + 1) if wr and wr > 0.05 else 1
+
+            if L:
+                # Distributed RLGC model (n_seg=1 for lumped)
+                # TODO: Use π-topology (C/2 at both segment ends) instead of
+                # L-topology (C at left end only). π is more accurate at high
+                # electrical lengths but requires adding C_seg/2 at n2 of last
+                # segment as well, which needs care at network junctions.
+                R_seg, L_seg = R / n_seg, L / n_seg
+                C_seg = C / n_seg if C else None
+                prev: int | str = n1
+                for s in range(n_seg):
+                    nxt: int | str = n2 if s == n_seg - 1 else f"w{idx}s{s}"
+                    mid = f"w{idx}s{s}m"
+                    ac.append(("R", prev, mid, R_seg))
+                    ac.append(("L", mid, nxt, L_seg))
+                    if C_seg:
+                        ac.append(("C", prev, _GND, C_seg))
+                    prev = nxt
+            else:
+                # R-only (no HF data)
+                ac.append(("R", n1, n2, R))
+
+        elif elem["type"] == VIA:
+            R = elem["resistance"]
+            L = elem.get("inductance")
+            C = elem.get("capacitance")
+            # R-L in series, C to the surrounding ground planes
+            if L:
+                mid = f"mid{idx}"
+                ac.append(("R", n1, mid, R))
+                ac.append(("L", mid, n2, L))
+            else:
+                ac.append(("R", n1, n2, R))
+            if C:
+                ac.append(("C", n1, _GND, C))
+
+        else:  # ZONE
+            R = elem["resistance"]
+            ac.append(("R", n1, n2, R))
+    return ac
 
 
 def RunSimulation(
@@ -426,6 +396,7 @@ def RunSimulation(
     network_info: list[NetworkElement] | None = None,
     frequencies: list[float] | None = None,
     rload_far: float | None = None,
+    progress: Progress = no_progress,
 ) -> tuple[
     float | None,
     dict[float, Impedance | None],
@@ -442,120 +413,66 @@ def RunSimulation(
         z_ac_conn1: dict {freq: single-ended Zin at conn1} (empty if rload_far None)
         z_ac_conn2: dict {freq: single-ended Zin at conn2} (empty if rload_far None)
     Raises:
-        SpiceUnavailableError: libngspice cannot be loaded
+        SpiceUnavailableError: ngspice cannot be started
+        CancelledError: `progress` asked to stop
     """
-    ngspyce = load_ngspyce()
-
     # Simulate only elements between the ports: copper not connected to conn1
     # would float, and an element whose terminals share a node carries no current
     # through it (its shunt capacitance is neglected).
+    network_info = network_info or []
+    frequencies = frequencies or []
     edges = [(r.node1, r.node2, 0.0) for r in resistors]
-    edges += [(*e["nodes"], 0.0) for e in network_info or []]
+    edges += [(*e["nodes"], 0.0) for e in network_info]
     connected = find_all_reachable_nodes(get_graph_from_edges(edges), conn1)
 
     def conducts(n1: int, n2: int) -> bool:
         return n1 != n2 and n1 in connected
 
+    z_ac: dict[float, Impedance | None] = {}
+    z_ac_conn1: dict[float, Impedance | None] = {}
+    z_ac_conn2: dict[float, Impedance | None] = {}
+    # (label, result store, port, port return, extra _run_spice arguments)
+    ac_ports: list[tuple[str, dict[float, Impedance | None], int, int, dict[str, Any]]]
+    ac_ports = [("AC", z_ac, conn1, conn2, {})]
+    if rload_far is not None:
+        far1 = {"far_node": conn2, "rload_far": rload_far}
+        far2 = {"far_node": conn1, "rload_far": rload_far}
+        ac_ports.append(("Zin(conn1)", z_ac_conn1, conn1, _GND, far1))
+        ac_ports.append(("Zin(conn2)", z_ac_conn2, conn2, _GND, far2))
+    total = 1 + len(frequencies) * len(ac_ports)
+    finished = 0
+
     def simulate(
         label: str, elements: list[SpiceElement], port: int, ret: int, **kw: Any
     ) -> Impedance | None:
+        nonlocal finished
         try:
-            return _run_spice(ngspyce, elements, port, ret, **kw)
-        except SpiceTimeoutError as e:
-            log.error("[SPICE] %s skipped: %s", label, e)
+            return _run_spice(spice, elements, port, ret, **kw)
+        except _SPICE_FAILURES as e:
+            log.error("[SPICE] %s failed: %s", label, e)
             return None
-        except _SPICE_FAILURES:
-            log.exception("[SPICE] %s failed", label)
-            return None
+        finally:
+            finished += 1
 
-    gnd = 0
-
-    # --- DC: R-only network ---
     dc_elements: list[SpiceElement] = [
         ("R", r.node1, r.node2, r.resistance)
         for r in resistors
         if conducts(r.node1, r.node2)
     ]
-    dc = simulate("DC", dc_elements, conn1, conn2)
-    r_dc = None if dc is None else dc.real
 
-    # --- AC: RLC network per frequency ---
-    z_ac: dict[float, Impedance | None] = {}
-    z_ac_conn1: dict[float, Impedance | None] = {}
-    z_ac_conn2: dict[float, Impedance | None] = {}
-    for freq in frequencies or []:
-        ac: list[SpiceElement] = []
-        for idx, elem in enumerate(network_info or [], start=1):
-            n1, n2 = elem["nodes"]
-            if not conducts(n1, n2):
-                continue
+    def on_wait() -> None:
+        report(progress, Stage.SPICE, finished, total)
 
-            if elem["type"] == WIRE:
-                hf = elem.get("hf", {}).get(freq)
-                R = hf["r_ac"] if hf else elem["resistance"]
-                L = hf.get("inductance") if hf else None
-                C = hf.get("capacitance") if hf else None
-
-                # Segment if > lambda/20
-                wr = hf.get("wavelength_ratio") if hf else None
-                n_seg = max(1, int(wr / 0.05) + 1) if wr and wr > 0.05 else 1
-
-                if L:
-                    # Distributed RLGC model (n_seg=1 for lumped)
-                    # TODO: Use π-topology (C/2 at both segment ends) instead of
-                    # L-topology (C at left end only). π is more accurate at high
-                    # electrical lengths but requires adding C_seg/2 at n2 of last
-                    # segment as well, which needs care at network junctions.
-                    R_seg, L_seg = R / n_seg, L / n_seg
-                    C_seg = C / n_seg if C else None
-                    prev: int | str = n1
-                    for s in range(n_seg):
-                        nxt: int | str = n2 if s == n_seg - 1 else f"w{idx}s{s}"
-                        mid = f"w{idx}s{s}m"
-                        ac.append(("R", prev, mid, R_seg))
-                        ac.append(("L", mid, nxt, L_seg))
-                        if C_seg:
-                            ac.append(("C", prev, gnd, C_seg))
-                        prev = nxt
-                else:
-                    # R-only (no HF data)
-                    ac.append(("R", n1, n2, R))
-
-            elif elem["type"] == VIA:
-                R = elem["resistance"]
-                L = elem.get("inductance")
-                C = elem.get("capacitance")
-                # R-L in series, C to the surrounding ground planes
-                if L:
-                    mid = f"mid{idx}"
-                    ac.append(("R", n1, mid, R))
-                    ac.append(("L", mid, n2, L))
-                else:
-                    ac.append(("R", n1, n2, R))
-                if C:
-                    ac.append(("C", n1, gnd, C))
-
-            else:  # ZONE
-                R = elem["resistance"]
-                ac.append(("R", n1, n2, R))
-
-        f_str = f"{freq:.0f} Hz"
-        z_ac[freq] = simulate(f"AC at {f_str}", ac, conn1, conn2, ac_freq=freq)
-        if rload_far is not None:
-            for port, far, store in (
-                (conn1, conn2, z_ac_conn1),
-                (conn2, conn1, z_ac_conn2),
-            ):
+    with closing(SpiceWorker(on_wait)) as spice:
+        dc = simulate("DC", dc_elements, conn1, conn2)
+        for freq in frequencies:
+            ac = _ac_elements(network_info, freq, conducts)
+            for label, store, port, ret, kw in ac_ports:
                 store[freq] = simulate(
-                    f"Zin({port}) at {f_str}",
-                    ac,
-                    port,
-                    gnd,
-                    ac_freq=freq,
-                    far_node=far,
-                    rload_far=rload_far,
+                    f"{label} at {freq:.0f} Hz", ac, port, ret, ac_freq=freq, **kw
                 )
 
+    r_dc = None if dc is None else dc.real
     return r_dc, z_ac, z_ac_conn1, z_ac_conn2
 
 
@@ -570,7 +487,10 @@ def Get_shortest_path_RES(path: list[int], resistors: list[Resistor]) -> float:
 
 
 def extract_network(
-    data: dict[Any, Any], CuStack: dict[int, CuLayer], netcode: int | None = None
+    data: dict[Any, Any],
+    CuStack: dict[int, CuLayer],
+    netcode: int | None = None,
+    progress: Progress = no_progress,
 ) -> dict[str, Any]:
     """Extract electrical network from PCB data (DC resistances only).
 
@@ -581,6 +501,7 @@ def extract_network(
         data: PCB element data dictionary
         CuStack: Copper stackup information
         netcode: KiCad net code to filter elements (None = use all elements)
+        progress: reports each element; see Progress
 
     Returns:
         dict with:
@@ -589,6 +510,8 @@ def extract_network(
             coordinates: dict {node: (x, y, z)}
             area: dict {layer: area}
             graph: adjacency dict from get_graph_from_edges
+    Raises:
+        CancelledError: `progress` asked to stop
     """
 
     resistors: list[Resistor] = []
@@ -596,7 +519,8 @@ def extract_network(
     coordinates: dict[int, tuple[float, float, float]] = {}
     Area: defaultdict[int, float] = defaultdict(float)
 
-    for uuid, d in data.items():
+    for finished, (uuid, d) in enumerate(data.items()):
+        report(progress, Stage.EXTRACT, finished, len(data))
         if netcode is not None and d["net_code"] != netcode:
             continue
 
@@ -858,6 +782,7 @@ def simulate_network(
     CuStack: dict[int, CuLayer],
     frequencies: list[float] | None = None,
     rload_far: float | None = None,
+    progress: Progress = no_progress,
 ) -> tuple[
     float | None,
     dict[float, Impedance | None],
@@ -877,6 +802,7 @@ def simulate_network(
         frequencies: list of frequencies in Hz for HF analysis
         rload_far: when set, also measure single-ended Zin at conn1 and conn2
             with this load resistance (in Ohm) at the far end
+        progress: reports HF parameters and simulations; see Progress
 
     Returns:
         (resistance_dc, impedance_ac, z_ac_conn1, z_ac_conn2)
@@ -884,12 +810,15 @@ def simulate_network(
         elements if frequencies are given.
         z_ac_conn1/z_ac_conn2 are empty dicts when rload_far is None.
         A failed simulation yields None (see RunSimulation).
+    Raises:
+        SpiceUnavailableError, CancelledError: see RunSimulation
     """
     resistors = network["resistors"]
     network_info = network["network_info"]
 
     # Compute HF parameters for WIRE elements
-    for elem in network_info:
+    for finished, elem in enumerate(network_info):
+        report(progress, Stage.HF, finished, len(network_info))
         if elem["type"] != WIRE:
             continue
         hf = {}
@@ -921,7 +850,9 @@ def simulate_network(
         if hf:
             elem["hf"] = hf
 
-    return RunSimulation(resistors, conn1, conn2, network_info, frequencies, rload_far)
+    return RunSimulation(
+        resistors, conn1, conn2, network_info, frequencies, rload_far, progress
+    )
 
 
 if __name__ == "__main__":

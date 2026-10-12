@@ -31,7 +31,8 @@
         {
             "version": "2025.xx.xx",
             "status": "stable",
-            "kicad_version": "8.0"
+            "kicad_version": "9.0",
+            "runtime": "ipc"
         }
     ]
 }
