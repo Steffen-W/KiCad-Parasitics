@@ -23,15 +23,17 @@ ruff check --fix --unsafe-fixes && ruff format
 
 ## API Support
 
-- **pcbnew API** (KiCad 9+, deprecated by KiCad): The classic scripting API, runs as a KiCad plugin inside the PCB editor.
-- **IPC API** (KiCad 9+): The new KiCad IPC API via [kipy](https://docs.kicad.org/kicad-python-main/). Can also be started externally outside of KiCad (e.g. from the command line) while KiCad is running:
+- **pcbnew API** (KiCad 9+, deprecated by KiCad): The classic scripting API, runs as a KiCad plugin inside the PCB editor. Works without further setup.
+- **IPC API** (KiCad 9+): The new KiCad IPC API via [kipy](https://docs.kicad.org/kicad-python-main/). Its button only appears after enabling the API in KiCad (Preferences → Plugins → Enable KiCad API). Can also be started externally outside of KiCad (e.g. from the command line) while KiCad is running:
   ```bash
   git clone https://github.com/Steffen-W/KiCad-Parasitics.git
   cd KiCad-Parasitics
   pip install -r plugins/requirements.txt
-  python plugins/parasitic.py
+  python plugins/ipc_plugin.py
   ```
   KiCad must be running with a board open.
+
+The simulation uses the ngspice library: a system installation, else the one bundled with KiCad on macOS and Windows. If neither is found, install ngspice (macOS: `brew install libngspice`) or set `LIBNGSPICE` to the library path.
 
 # How It Works
 

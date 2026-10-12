@@ -212,3 +212,45 @@ def test_build_connectivity_covers_every_contact_kind() -> None:
         "w9": ([], []),
         "w10": ([], []),
     }
+
+
+def test_extract_network_skips_defective_elements(
+    coil_data: dict[Any, dict[str, Any]],
+    cu_stack: dict[int, Any],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import get_parasitic as gp
+
+    wires = [d for d in coil_data.values() if d["type"] == "WIRE"]
+    wires[1]["width"] = 0.0
+    via = {
+        "type": "VIA",
+        "layer": [0, 2],
+        "net_start": {0: wires[0]["net_start"][0], 2: 10_000},
+        "position": (0.0, 0.0),
+        "drill": 0.0,
+    }
+
+    network = gp.extract_network({**coil_data, "via": via}, cu_stack)
+
+    assert len(network["resistors"]) == len(wires) - 1
+    assert [s.split()[0] for s in network["skipped"]] == ["WIRE", "VIA"]
+    assert "Skipping WIRE" in caplog.text
+
+
+@pytest.mark.parametrize("r_dc", [0.0, -1.0, math.nan, math.inf])
+def test_extract_network_skips_unusable_resistance(
+    coil_data: dict[Any, dict[str, Any]],
+    cu_stack: dict[int, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    r_dc: float,
+) -> None:
+    import get_parasitic as gp
+
+    monkeypatch.setattr(gp, "analyze_trace", lambda *_a, **_k: {"r_dc": r_dc})
+
+    network = gp.extract_network(coil_data, cu_stack)
+
+    assert network["resistors"] == []
+    assert all(s.startswith("WIRE") for s in network["skipped"])
+    assert network["skipped"]

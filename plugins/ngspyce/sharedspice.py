@@ -1,6 +1,10 @@
+from __future__ import annotations
+
 import logging
 import os
 import platform
+import sys
+from contextlib import ExitStack
 from ctypes import (
     CDLL,
     CFUNCTYPE,
@@ -14,54 +18,99 @@ from ctypes import (
     c_void_p,
 )
 from ctypes.util import find_library
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# libngspice source code is listed before the relevant ctype structs
 
-if os.name == "nt":  # Windows
-    # http://stackoverflow.com/a/13277363
-    curr_dir_before = os.getcwd()
+def _kicad_library_dir() -> str | None:
+    """Directory of the libngspice that KiCad ships, if this is KiCad's Python.
 
-    drive = os.getenv("SystemDrive") or "C:"
+    The plugin runs on KiCad's bundled Python (IPC venv or pcbnew), which lies
+    inside the KiCad installation on macOS and Windows; KiCad loads ngspice from
+    Contents/PlugIns/sim of the app bundle and from its bin directory there.
+    """
+    prefix = os.path.abspath(sys.base_prefix)
+    if platform.system() == "Darwin":
+        bundle = next((p for p in Path(prefix).parents if p.suffix == ".app"), None)
+        return str(bundle / "Contents" / "PlugIns" / "sim") if bundle else None
+    if os.name == "nt":
+        return prefix  # KiCad's python.exe sits next to its DLLs in bin
+    return None
 
-    # Python and DLL must both be same number of bits
-    if platform.architecture()[0] == "64bit":
-        spice_path = os.path.join(drive, os.sep, "Spice64")
-    elif platform.architecture()[0] == "32bit":
-        spice_path = os.path.join(drive, os.sep, "Spice")
+
+def _library_candidates() -> list[str]:
+    """libngspice locations in the order to try; LIBNGSPICE overrides all others."""
+    explicit = os.environ.get("LIBNGSPICE")
+    if explicit:
+        return [explicit]
+    if os.name == "nt":
+        drive = os.getenv("SystemDrive") or "C:"
+        # The default install folder of the official ngspice build
+        spice_dir = os.path.join(
+            drive, os.sep, "Spice64" if sys.maxsize > 2**32 else "Spice"
+        )
+        names, fallbacks = (
+            ["ngspice.dll", "libngspice-0.dll"],
+            [os.path.join(spice_dir, "bin_dll", "ngspice.dll")],
+        )
+    elif platform.system() == "Darwin":
+        names, fallbacks = (
+            ["libngspice.0.dylib", "libngspice.dylib"],
+            ["/opt/homebrew/lib/libngspice.dylib"],
+        )
     else:
-        raise RuntimeError("Couldn't determine if Python is 32-bit or 64-bit")
+        names, fallbacks = [], []
+    kicad_dir = _kicad_library_dir()
+    bundled = [os.path.join(kicad_dir, name) for name in names] if kicad_dir else []
+    system = find_library("ngspice")
+    return ([system] if system else []) + bundled + fallbacks
 
+
+def _use_installation_scripts(library: str) -> None:
+    """Let ngspice read spinit from the installation the library belongs to.
+
+    Unset, SPICE_LIB_DIR falls back to a location compiled into ngspice, which
+    need not exist for a library loaded from another installation.
     """
-    https://sourceforge.net/p/ngspice/discussion/133842/thread/1cece652/#4e32/5ab8/9027
-    On Windows, when environment variable SPICE_LIB_DIR is empty, ngspice
-    looks in `C:\\Spice64\\share\\ngspice\\scripts`.  If the variable is not empty
-    it tries `%SPICE_LIB_DIR%\\scripts\\spinit`
-    """
+    lib_dir = os.path.join(
+        os.path.dirname(os.path.dirname(library)), "share", "ngspice"
+    )
+    spinit = os.path.join(lib_dir, "scripts", "spinit")
+    if os.path.isabs(library) and os.path.isfile(spinit):
+        os.environ.setdefault("SPICE_LIB_DIR", lib_dir)
 
-    if "SPICE_LIB_DIR" not in os.environ:
-        os.environ["SPICE_LIB_DIR"] = os.path.join(spice_path, "share", "ngspice")
 
-    try:
-        spice = CDLL("ngspice")
-    except OSError:
-        os.chdir(os.path.join(spice_path, "bin_dll"))
-        try:
-            spice = CDLL("ngspice")
-        finally:
-            os.chdir(curr_dir_before)
-else:  # Linux, etc.
-    lib_location = os.environ.get("LIBNGSPICE") or find_library("ngspice")
+# Windows DLL directories of the loaded library, registered for the process
+# so that ngspice also finds the libraries it loads later.
+_dll_directories: list[ExitStack] = []
 
-    # try homebrew location as a last resort for MacOS
-    if lib_location is None and platform.system() == "Darwin":
-        lib_location = "/opt/homebrew/lib/libngspice.dylib"
 
-    if lib_location is None:
-        raise OSError("ngspice library not found. Install ngspice or set LIBNGSPICE.")
+def _load_library() -> CDLL:
+    tried = []
+    for candidate in _library_candidates():
+        if os.path.isabs(candidate) and not os.path.isfile(candidate):
+            tried.append(f"{candidate} (missing)")
+            continue
+        with ExitStack() as dll_directory:
+            if os.name == "nt" and os.path.isabs(candidate):
+                dll_directory.enter_context(
+                    os.add_dll_directory(os.path.dirname(candidate))
+                )
+            try:
+                library = CDLL(candidate)
+            except OSError as e:
+                tried.append(f"{candidate} ({e})")
+                continue
+            _dll_directories.append(dll_directory.pop_all())
+            _use_installation_scripts(candidate)
+            return library
+    raise OSError(f"ngspice library not found (tried: {'; '.join(tried) or 'nothing'})")
 
-    spice = CDLL(lib_location)
+
+spice = _load_library()
+
+# libngspice source code is listed before the relevant ctype structs
 
 captured_output = []
 

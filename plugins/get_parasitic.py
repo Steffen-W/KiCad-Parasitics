@@ -215,6 +215,16 @@ def analyze_trace(
 # OSError that ngspyce and ctypes raise in the ngspice process.
 _SPICE_FAILURES = (RuntimeError, ValueError, OSError)
 
+# Failures of the parasitics of a single element; the element is skipped.
+_ELEMENT_FAILURES = (ValueError, ZeroDivisionError)
+
+
+def _checked_resistance(resistance: float) -> float:
+    """`resistance` if it is finite and positive, else ValueError."""
+    if not (math.isfinite(resistance) and resistance > 0):
+        raise ValueError(f"resistance {resistance}")
+    return resistance
+
 
 def _run_spice(
     spice: SpiceWorker,
@@ -489,7 +499,6 @@ def Get_shortest_path_RES(path: list[int], resistors: list[Resistor]) -> float:
 def extract_network(
     data: dict[Any, Any],
     CuStack: dict[int, CuLayer],
-    netcode: int | None = None,
     progress: Progress = no_progress,
 ) -> dict[str, Any]:
     """Extract electrical network from PCB data (DC resistances only).
@@ -500,8 +509,10 @@ def extract_network(
     Args:
         data: PCB element data dictionary
         CuStack: Copper stackup information
-        netcode: KiCad net code to filter elements (None = use all elements)
         progress: reports each element; see Progress
+
+    An element that cannot be modelled (layer missing from the stackup, or no
+    finite positive resistance) is logged, skipped and listed in "skipped".
 
     Returns:
         dict with:
@@ -510,6 +521,7 @@ def extract_network(
             coordinates: dict {node: (x, y, z)}
             area: dict {layer: area}
             graph: adjacency dict from get_graph_from_edges
+            skipped: descriptions of the elements that were left out
     Raises:
         CancelledError: `progress` asked to stop
     """
@@ -518,11 +530,14 @@ def extract_network(
     network_info: list[NetworkElement] = []
     coordinates: dict[int, tuple[float, float, float]] = {}
     Area: defaultdict[int, float] = defaultdict(float)
+    skipped: list[str] = []
+
+    def skip(element: str) -> None:
+        log.warning("Skipping %s", element)
+        skipped.append(element)
 
     for finished, (uuid, d) in enumerate(data.items()):
         report(progress, Stage.EXTRACT, finished, len(data))
-        if netcode is not None and d["net_code"] != netcode:
-            continue
 
         if len(d["layer"]) > 1:
             # Multi-layer element (VIA or through-hole PAD)
@@ -530,7 +545,7 @@ def extract_network(
             nodes = []
             for layer in d["layer"]:
                 if layer not in CuStack:
-                    log.warning("Layer %s not in CuStack, skipping", layer)
+                    skip(f"{d['type']} on layer {layer}: layer not in the stackup")
                     continue
                 if layer in d.get("net_start", {}):
                     node = d["net_start"][layer]
@@ -550,20 +565,21 @@ def extract_network(
                     Layer1, node1 = nodes[i]
                     for j in range(i + 1, len(nodes)):
                         Layer2, node2 = nodes[j]
-                        if Layer2 not in CuStack or Layer1 not in CuStack:
-                            log.error(
-                                "CuStack incomplete for layers %s, %s", Layer1, Layer2
-                            )
-                            continue
                         if "drill" not in d:
                             continue
                         distance = abs(
                             CuStack[Layer2]["abs_height"]
                             - CuStack[Layer1]["abs_height"]
                         )
-                        via = get_Via_Parasitics(d["drill"], thickness, distance)
-                        if via["resistance"] < 0:
-                            raise ValueError("Error in resistance calculation!")
+                        try:
+                            via = get_Via_Parasitics(d["drill"], thickness, distance)
+                            _checked_resistance(via["resistance"])
+                        except _ELEMENT_FAILURES as e:
+                            skip(
+                                f"{d['type']} at {d['position']} between layers "
+                                f"{Layer1} and {Layer2}: {e}"
+                            )
+                            continue
                         resistors.append(
                             Resistor(node1, node2, via["resistance"], distance)
                         )
@@ -587,7 +603,7 @@ def extract_network(
         elif len(d["layer"]) == 1:
             Layer = d["layer"][0]
             if Layer not in CuStack:
-                log.warning("Layer %s not in CuStack, skipping element", Layer)
+                skip(f"{d['type']} on layer {Layer}: layer not in the stackup")
                 continue
             Area[Layer] += d["area"]
 
@@ -605,14 +621,17 @@ def extract_network(
                     )
                     continue
 
-                trace = analyze_trace(
-                    d["length"], d["width"], Layer, CuStack, frequency=0
-                )
-                if trace["r_dc"] <= 0:
-                    raise ValueError(
-                        f"Invalid resistance for WIRE (layer={Layer}, "
-                        f"length={d['length']}, width={d['width']}): r_dc={trace['r_dc']}"
+                try:
+                    trace = analyze_trace(
+                        d["length"], d["width"], Layer, CuStack, frequency=0
                     )
+                    _checked_resistance(trace["r_dc"])
+                except _ELEMENT_FAILURES as e:
+                    skip(
+                        f"WIRE on layer {Layer} (length={d['length']}, "
+                        f"width={d['width']}): {e}"
+                    )
+                    continue
                 resistors.append(Resistor(netStart, netEnd, trace["r_dc"], d["length"]))
 
                 info: NetworkElement = {
@@ -663,7 +682,7 @@ def extract_network(
     # Handle ZONES: connect all elements touching the same zone
     zone_connections: dict[int, dict[Any, list[int]]] = {}
     for uuid, d in data.items():
-        if (netcode is not None and d["net_code"] != netcode) or d["type"] != ZONE:
+        if d["type"] != ZONE:
             continue
 
         zone_conns = d.get("conn_start", [])
@@ -735,6 +754,7 @@ def extract_network(
         "coordinates": coordinates,
         "area": area,
         "graph": graph,
+        "skipped": skipped,
     }
 
 
@@ -827,7 +847,7 @@ def simulate_network(
                 hf[f] = analyze_trace(
                     elem["length"], elem["width"], elem["layer"], CuStack, frequency=f
                 )
-            except (ValueError, ZeroDivisionError):
+            except _ELEMENT_FAILURES:
                 log.exception(
                     "analyze_trace failed for WIRE %s at %.0f MHz "
                     "(L=%.2fmm, W=%.3fmm) -- falling back to DC resistance",

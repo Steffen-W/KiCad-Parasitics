@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -85,3 +86,27 @@ def test_file_stackup_falls_back_to_two_layers(
     stack = Get_PCB_Stackup_fun(board_file)
 
     assert {k: v["name"] for k, v in stack.items()} == {0: "F.Cu", 2: "B.Cu"}
+
+
+@pytest.mark.parametrize(
+    ("selected", "kept"),
+    [
+        ({"a1", "a2"}, {"a1", "a2", "a3"}),
+        ({"a1", "b1"}, {"a1", "a2", "a3", "b1"}),
+        (set(), set()),
+    ],
+    ids=["same net", "two nets", "nothing selected"],
+)
+def test_pcbnew_reader_keeps_only_selected_nets(
+    monkeypatch: pytest.MonkeyPatch, selected: set[str], kept: set[str]
+) -> None:
+    monkeypatch.setitem(sys.modules, "pcbnew", mock.MagicMock())
+    from get_pcb_elements import _selected_nets_only
+
+    nets = {"a1": 1, "a2": 1, "a3": 1, "b1": 2, "c1": 3}
+    items = {
+        oid: {"net_code": net, "is_selected": oid in selected}
+        for oid, net in nets.items()
+    }
+
+    assert set(_selected_nets_only(items)) == kept

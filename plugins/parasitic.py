@@ -6,7 +6,6 @@ import logging
 import math
 import os
 import re
-import sys
 import time
 import traceback
 import warnings
@@ -15,15 +14,6 @@ from typing import Any, TextIO
 import wx
 
 warnings.filterwarnings("ignore", message="pkg_resources is deprecated")
-
-venv = os.environ.get("VIRTUAL_ENV")
-if venv:
-    version = f"python{sys.version_info.major}.{sys.version_info.minor}"
-    venv_site_packages = os.path.join(venv, "lib", version, "site-packages")
-    if venv_site_packages in sys.path:
-        sys.path.remove(venv_site_packages)
-    sys.path.insert(0, venv_site_packages)
-
 
 try:
     from .connect_nets import NOT_ASSIGNED, Connect_Nets
@@ -154,7 +144,8 @@ def analyze_pcb_parasitic(
     Returns:
         dict with: resistance_dc, impedance_ac, distance, short_path_resistance,
                    area, network_info, graph, path, conn1, conn2, error,
-                   spice_unavailable (message when ngspice cannot be started)
+                   spice_unavailable (message when ngspice cannot be started),
+                   skipped (elements left out of the network, see extract_network)
     Raises:
         CancelledError: `progress` asked to stop
     """
@@ -171,9 +162,11 @@ def analyze_pcb_parasitic(
         "conn2": None,
         "error": None,
         "spice_unavailable": None,
+        "skipped": [],
     }
 
     network = extract_network(data, CuStack, progress=progress)
+    result["skipped"] = network["skipped"]
     best_distance, best_conn = _best_connection(network, element1, element2, progress)
 
     if not best_conn:
@@ -294,9 +287,17 @@ def format_result_message(
 ) -> str:
     """Format analysis result as human-readable message."""
     lines = []
+    if result["skipped"]:
+        lines += [
+            (
+                f"Warning: {len(result['skipped'])} modelling issue(s), so the result "
+                "may be incomplete (see debug_parasitic.log)."
+            ),
+            "",
+        ]
 
     if result["error"]:
-        return str(result["error"])
+        return "\n".join([*lines, str(result["error"])])
 
     if net_tie_info:
         lines.append("Net tie:")
@@ -465,7 +466,7 @@ def _dialog_progress(dialog: wx.ProgressDialog) -> Progress:
     return update
 
 
-def _show_message(parent: wx.Window | None, text: str, caption: str, icon: int) -> None:
+def show_message(parent: wx.Window | None, text: str, caption: str, icon: int) -> None:
     with wx.MessageDialog(
         parent, text, caption, wx.OK | icon | _orphan_on_top(parent)
     ) as dlg:
@@ -560,7 +561,7 @@ class ResultDialog(wx.Dialog):
         result = self.analysis_result
         cu_stack = self.cu_stack
         if not result or cu_stack is None:
-            _show_message(
+            show_message(
                 self,
                 "No analysis result is available to compute inductance from.",
                 "Inductance Calculation",
@@ -696,7 +697,7 @@ class ResultDialog(wx.Dialog):
             show_debug_plots(debug_data, segments, parent=None)
         except Exception as e:
             log.exception("Debug Plots failed")
-            _show_message(
+            show_message(
                 self,
                 f"ERROR: could not show debug plots.\n\n{type(e).__name__}: {e}",
                 "Debug Plots",
@@ -832,74 +833,6 @@ def run_plugin(
 
     except Exception:
         log.exception("Fatal error")
-        _show_message(
+        show_message(
             wx.GetActiveWindow(), traceback.format_exc(), "Fatal Error", wx.ICON_ERROR
         )
-
-
-if __name__ == "__main__":
-    from kipy import KiCad, errors
-
-    from get_pcb_elements_ipc import Get_PCB_Elements_IPC, SelectionError
-    from get_pcb_stackup_ipc import Get_PCB_Stackup_IPC
-
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format="%(asctime)s %(levelname)s [%(filename)s:%(lineno)d]: %(message)s",
-        filename=os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "debug_parasitic.log"
-        ),
-        filemode="w",
-        encoding="utf-8",
-    )
-    # Suppress noisy third-party debug output
-    for _logger_name in (
-        "matplotlib",
-        "matplotlib.font_manager",
-        "matplotlib.ticker",
-        "matplotlib.colorbar",
-        "matplotlib.backends",
-        "pynng",
-        "pynng.nng",
-        "ngspyce",
-        "sharedspice",
-    ):
-        logging.getLogger(_logger_name).setLevel(logging.WARNING)
-    log.debug("parasitic.py started")
-
-    app = wx.App()
-    try:
-        kicad = KiCad()
-        log.debug("Connected to KiCad %s", kicad.get_version())
-
-        try:
-            board = kicad.get_board()
-        except errors.ApiError:
-            log.exception("Failed to get board")
-            _show_message(
-                None, "No PCB is open in KiCad.", "Parasitics", wx.ICON_WARNING
-            )
-            sys.exit(1)
-        log.debug("Board: %s", board.document.board_filename)
-
-        ItemList, net_tie_info = Get_PCB_Elements_IPC(board)
-        log.debug("Got %d elements from IPC API", len(ItemList))
-
-        CuStack = Get_PCB_Stackup_IPC(board)
-        run_plugin(ItemList, CuStack, net_tie_info)
-        # Keep event loop alive for any open PlotFrame windows
-        app.MainLoop()
-    except errors.ConnectionError:
-        log.exception("ConnectionError")
-        _show_message(
-            None,
-            "Could not connect to KiCad. Is KiCad running with the API enabled?",
-            "Parasitics",
-            wx.ICON_ERROR,
-        )
-    except SelectionError as e:
-        log.warning("Invalid selection: %s", e)
-        _show_message(None, str(e), "Parasitics", wx.ICON_WARNING)
-    except Exception:
-        log.exception("__main__")
-        _show_message(None, traceback.format_exc(), "Fatal Error", wx.ICON_ERROR)

@@ -171,9 +171,16 @@ def getConnections(
     return ConnStart, ConnEnd
 
 
+def _selected_nets_only(items: dict[int, dict[str, Any]]) -> dict[int, dict[str, Any]]:
+    """The elements of every net that contains a selected element."""
+    nets = {d["net_code"] for d in items.values() if d["is_selected"]}
+    return {oid: d for oid, d in items.items() if d["net_code"] in nets}
+
+
 def Get_PCB_Elements(
     board: pcbnew.BOARD, connect: pcbnew.CONNECTIVITY_DATA
 ) -> tuple[dict[int, dict[str, Any]], float]:
+    """Copper elements of the nets the selection belongs to, and the board thickness."""
     DesignSettings: pcbnew.BOARD_DESIGN_SETTINGS = board.GetDesignSettings()
     PossibleLayer = set(DesignSettings.GetEnabledLayers().CuStack())
     BoardThickness = ToM(DesignSettings.GetBoardThickness())
@@ -267,6 +274,8 @@ def Get_PCB_Elements(
             + getHashList(connect.GetConnectedTracks(item))
         )
         ItemList[temp["id"]] = temp
+
+    ItemList = _selected_nets_only(ItemList)
 
     for uuid, d in list(ItemList.items()):
         if d["type"] == ZONE:

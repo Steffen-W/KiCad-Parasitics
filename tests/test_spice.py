@@ -309,3 +309,113 @@ def test_failed_unload_ends_the_process_without_reply(
 
     assert parent.recv() == (None, [])
     assert not parent.poll()
+
+
+def test_kicad_bundle_is_searched_after_the_system_library(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ngspyce import sharedspice
+
+    contents = "/Applications/KiCad/KiCad.app/Contents"
+    monkeypatch.delenv("LIBNGSPICE", raising=False)
+    monkeypatch.setattr(sharedspice.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(
+        sharedspice.sys,
+        "base_prefix",
+        f"{contents}/Frameworks/Python.framework/Versions/3.9",
+    )
+    monkeypatch.setattr(sharedspice, "find_library", lambda _name: "libngspice.so.0")
+
+    assert sharedspice._library_candidates() == [
+        "libngspice.so.0",
+        f"{contents}/PlugIns/sim/libngspice.0.dylib",
+        f"{contents}/PlugIns/sim/libngspice.dylib",
+        "/opt/homebrew/lib/libngspice.dylib",
+    ]
+
+    monkeypatch.setenv("LIBNGSPICE", "/custom/libngspice.so")
+    assert sharedspice._library_candidates() == ["/custom/libngspice.so"]
+
+
+def test_unloadable_library_lists_what_was_tried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ngspyce import sharedspice
+
+    monkeypatch.setattr(
+        sharedspice, "_library_candidates", lambda: ["/missing/libngspice.so"]
+    )
+
+    with pytest.raises(OSError, match=r"tried: /missing/libngspice.so \(missing\)"):
+        sharedspice._load_library()
+
+
+def test_dll_directory_stays_registered_only_for_the_loaded_library(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from ngspyce import sharedspice
+
+    broken, loaded = tmp_path / "a" / "ngspice.dll", tmp_path / "b" / "ngspice.dll"
+    for dll in (broken, loaded):
+        dll.parent.mkdir()
+        dll.touch()
+    registered: set[str] = set()
+
+    class DllDirectory:
+        def __init__(self, path: str) -> None:
+            self.path = path
+            registered.add(path)
+
+        def __enter__(self) -> None:
+            pass
+
+        def __exit__(self, *_exc: object) -> None:
+            registered.discard(self.path)
+
+    def cdll(path: str) -> str:
+        assert os.path.dirname(path) in registered
+        if path == str(broken):
+            raise OSError("wrong architecture")
+        return "library"
+
+    monkeypatch.setattr(sharedspice.os, "name", "nt")
+    monkeypatch.setattr(
+        sharedspice.os, "add_dll_directory", DllDirectory, raising=False
+    )
+    monkeypatch.setattr(sharedspice, "CDLL", cdll)
+    monkeypatch.setattr(
+        sharedspice, "_library_candidates", lambda: [str(broken), str(loaded)]
+    )
+    monkeypatch.setattr(sharedspice, "_dll_directories", [])
+
+    assert sharedspice._load_library() == "library"
+    assert registered == {str(loaded.parent)}
+
+
+def test_spice_lib_dir_points_to_the_installation_of_the_library(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from ngspyce import sharedspice
+
+    library = tmp_path / "bin_dll" / "ngspice.dll"
+    library.parent.mkdir()
+    library.touch()
+    lib_dir = tmp_path / "share" / "ngspice"
+    (lib_dir / "scripts").mkdir(parents=True)
+    (lib_dir / "scripts" / "spinit").touch()
+    monkeypatch.setattr(sharedspice, "CDLL", lambda _path: "library")
+    monkeypatch.setattr(sharedspice, "_library_candidates", lambda: [str(library)])
+    monkeypatch.setattr(sharedspice, "_dll_directories", [])
+    monkeypatch.delenv("SPICE_LIB_DIR", raising=False)
+
+    sharedspice._load_library()
+    assert os.environ["SPICE_LIB_DIR"] == str(lib_dir)
+
+    monkeypatch.setenv("SPICE_LIB_DIR", "/user/choice")
+    sharedspice._load_library()
+    assert os.environ["SPICE_LIB_DIR"] == "/user/choice"
+
+    (lib_dir / "scripts" / "spinit").unlink()
+    monkeypatch.delenv("SPICE_LIB_DIR")
+    sharedspice._load_library()
+    assert "SPICE_LIB_DIR" not in os.environ

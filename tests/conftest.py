@@ -14,12 +14,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "plugins"))
 
 @pytest.fixture
 def no_wx(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub wxPython (no PyPI wheels for Linux) for importing the GUI module.
-
-    VIRTUAL_ENV is cleared because parasitic.py reorders sys.path for it on import.
-    """
+    """Stub wxPython (no PyPI wheels for Linux) for importing the GUI module."""
     monkeypatch.setitem(sys.modules, "wx", mock.MagicMock())
-    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
 
 
 @pytest.fixture

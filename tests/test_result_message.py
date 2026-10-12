@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -28,6 +29,7 @@ def _result(**overrides: Any) -> dict[str, Any]:
         "zin_termination_ohm": 50.0,
         "area": {},
         "spice_unavailable": None,
+        "skipped": [],
     }
     result.update(overrides)
     return result
@@ -156,3 +158,46 @@ def test_dialog_progress_shows_every_new_stage(no_wx: None) -> None:
         "Step 1 of 4: Extracting network (0 of 2 done)",
         "Step 2 of 4: Finding path (0 of 1 done)",
     ]
+
+
+def test_import_failure_is_logged_and_shown(
+    no_wx: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import logging
+    import sys
+
+    import ipc_plugin
+    import plugin_logging
+
+    root = logging.getLogger()
+    monkeypatch.setattr(root, "handlers", [])
+    monkeypatch.setattr(root, "level", root.level)
+    for name in plugin_logging.QUIET_LOGGERS:
+        monkeypatch.setattr(logging.getLogger(name), "level", logging.NOTSET)
+    log_file = tmp_path / "debug.log"
+    monkeypatch.setattr(plugin_logging, "LOG_FILE", str(log_file))
+    monkeypatch.setitem(sys.modules, "parasitic", None)
+
+    with pytest.raises(SystemExit) as exit_info:
+        ipc_plugin.main()
+    for handler in root.handlers:
+        handler.close()
+
+    assert exit_info.value.code == 1
+    logged = log_file.read_text(encoding="utf-8")
+    assert "Importing the plugin failed" in logged
+    assert "ModuleNotFoundError" in logged or "ImportError" in logged
+    shown = sys.modules["wx"].MessageDialog.call_args.args[1]
+    assert "could not start" in shown
+    assert "parasitic" in shown
+
+
+@pytest.mark.parametrize("error", [None, "No connection found"])
+def test_skipped_elements_are_reported(
+    format_result_message: Any, cu_stack: dict[int, Any], error: str | None
+) -> None:
+    result = _result(skipped=["WIRE on layer 0: resistance nan"], error=error)
+
+    text = format_result_message(result, cu_stack)
+
+    assert text.startswith("Warning: 1 modelling issue(s)")

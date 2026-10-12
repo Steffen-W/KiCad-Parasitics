@@ -16,7 +16,7 @@
       "scopes": [
         "pcb"
       ],
-      "entrypoint": "parasitic.py",
+      "entrypoint": "ipc_plugin.py",
       "icons-light": [
         "icon_small.png"
       ],
