@@ -8,13 +8,9 @@ from typing import Any
 
 import pytest
 
+from board_model import arc_geometry, pad, via, wire, zone
+from connectivity import _bboxes_overlap, _BBoxGrid, build_connectivity
 from get_distance import find_shortest_path
-from get_pcb_elements_ipc import (
-    _arc_geometry,
-    _bboxes_overlap,
-    _BBoxGrid,
-    _build_connectivity,
-)
 
 
 def test_connect_nets_assigns_distinct_nodes_along_chain(
@@ -41,7 +37,7 @@ def test_find_shortest_path_unreachable() -> None:
 
 
 def test_arc_geometry_half_circle() -> None:
-    angle, length, circle = _arc_geometry((1.0, 0.0), (-1.0, 0.0), (0.0, 1.0))
+    angle, length, circle = arc_geometry((1.0, 0.0), (-1.0, 0.0), (0.0, 1.0))
 
     assert circle is not None
     assert circle.center == pytest.approx((0.0, 0.0))
@@ -51,7 +47,7 @@ def test_arc_geometry_half_circle() -> None:
 
 
 def test_arc_geometry_collinear_falls_back_to_chord() -> None:
-    assert _arc_geometry((0.0, 0.0), (2.0, 0.0), (1.0, 0.0)) == (0.0, 2.0, None)
+    assert arc_geometry((0.0, 0.0), (2.0, 0.0), (1.0, 0.0)) == (0.0, 2.0, None)
 
 
 def test_bbox_grid_finds_exactly_the_overlapping_boxes_in_order() -> None:
@@ -109,28 +105,13 @@ def test_build_connectivity_links_consecutive_coil_segments() -> None:
     for d in items.values():
         d["conn_start"], d["conn_end"] = [], []
 
-    _build_connectivity(items)
+    build_connectivity(items)
 
     wires = [oid for oid, d in items.items() if d["type"] == "WIRE"]
     assert len(wires) == len(items) > 2
     for prev, cur in zip(wires, wires[1:]):
         assert cur in items[prev]["conn_end"]
         assert prev in items[cur]["conn_start"]
-
-
-def _wire(x0: float, y0: float, x1: float, y1: float, layer: int = 0) -> dict[str, Any]:
-    """0.2 mm wide straight track between two points given in mm."""
-    start, end = (x0 * 1e-3, y0 * 1e-3), (x1 * 1e-3, y1 * 1e-3)
-    return {
-        "type": "WIRE",
-        "start": start,
-        "end": end,
-        "width": 0.2e-3,
-        "layer": [layer],
-        "midline_pts": [start, end],
-        "conn_start": [],
-        "conn_end": [],
-    }
 
 
 def _square(cx: float, cy: float, half: float) -> list[tuple[float, float]]:
@@ -141,56 +122,54 @@ def _square(cx: float, cy: float, half: float) -> list[tuple[float, float]]:
 
 
 def test_build_connectivity_covers_every_contact_kind() -> None:
-    pad = {
-        "type": "PAD",
-        "position": (20e-3, 0.0),
-        "size": (2e-3, 1e-3),
-        "shape": 2,
-        "orientation": 0,
-        "drill": 0.0,
-        "layer": [0],
-        "_outline": [
-            (19e-3, -0.5e-3),
-            (21e-3, -0.5e-3),
-            (21e-3, 0.5e-3),
-            (19e-3, 0.5e-3),
-        ],
-        "conn_start": [],
-    }
+    def w(oid: str, x0: float, y0: float, x1: float, y1: float) -> Any:
+        """0.2 mm wide track on layer 0 between two points given in mm."""
+        return wire(
+            oid, "N", [0], (x0 * 1e-3, y0 * 1e-3), (x1 * 1e-3, y1 * 1e-3), 0.2e-3
+        )
 
-    def via(x: float) -> dict[str, Any]:
-        return {
-            "type": "VIA",
-            "position": (x * 1e-3, 0.0),
-            "width": 0.6e-3,
-            "drill": 0.3e-3,
-            "layer": [0, 2],
-            "conn_start": [],
-        }
+    def v(oid: str, x: float, y: float = 0.0) -> Any:
+        return via(oid, "N", [0, 2], (x * 1e-3, y * 1e-3), 0.6e-3, 0.3e-3)
 
-    items = {
-        "w1": _wire(0, 0, 10, 0),
-        "w2": _wire(10, 0, 10, 10),  # endpoint on w1's end
-        "w3": _wire(5, -5, 5, 0),  # T-junction on w1's body
-        "v1": {**via(10), "position": (10e-3, 10e-3)},  # larger radius than w2
-        "w4": _wire(15, 0, 25, 0),  # runs through the pad
-        "pad": pad,
-        "w5": _wire(20, 5, 20, 0.4),  # ends inside the pad
-        "zone": {
-            "type": "ZONE",
-            "layer": [2],
-            "_outline": _square(35, 0, 5),
-            "conn_start": [],
-        },
-        "v2": via(35),  # inside the zone on layer 2
-        "w6": _wire(30, 0, 35, 0),  # layer 0 only: reaches v2, not the zone
-        "w7": _wire(50, 0, 51, 0),
-        "w8": _wire(51.2, 0, 52, 0),  # gap equals both half widths: touching
-        "w9": _wire(60, 0, 61, 0),
-        "w10": _wire(61.2 + 1e-5, 0, 62, 0),  # 10 nm further: not touching
-    }
+    elements = [
+        w("w1", 0, 0, 10, 0),
+        w("w2", 10, 0, 10, 10),  # endpoint on w1's end
+        w("w3", 5, -5, 5, 0),  # T-junction on w1's body
+        v("v1", 10, 10),  # larger radius than w2
+        w("w4", 15, 0, 25, 0),  # runs through the pad
+        pad("pad", "N", [0], (20e-3, 0.0), 0.0, _square(20, 0, 0.5)),
+        w("w5", 20, 5, 20, 0.4),  # ends inside the pad
+        zone("zone", "N", [2], _square(35, 0, 5), 1e-4),
+        v("v2", 35),  # inside the zone on layer 2
+        pad(
+            "pad2", "N", [2], (40.2e-3, 0.0), 0.0, _square(40.2, 0, 0.5)
+        ),  # overlaps it
+        w("w6", 30, 0, 35, 0),  # layer 0 only: reaches v2, not the zone
+        w("w7", 50, 0, 51, 0),
+        w("w8", 51.2, 0, 52, 0),  # gap equals both half widths: touching
+        w("w9", 60, 0, 61, 0),
+        w("w10", 61.2 + 1e-5, 0, 62, 0),  # 10 nm further: not touching
+        w("w11", 70, -1, 70, 1),  # crosses the zone below on layer 0
+        zone(
+            "zone0",
+            "N",
+            [0],
+            [(69e-3, -0.5e-3), (71e-3, -0.5e-3), (70e-3, 0.5e-3)],
+            1e-6,
+        ),
+        # ends in a long zone; its other end is nearer to the zone's centre
+        w("w12", 121, 0, 130, 5),
+        zone(
+            "zone1",
+            "N",
+            [0],
+            [(120e-3, -1e-3), (140e-3, -1e-3), (140e-3, 1e-3), (120e-3, 1e-3)],
+            4e-5,
+        ),
+    ]
+    items = {e["id"]: e for e in elements}
 
-    _build_connectivity(items)
+    build_connectivity(items)
 
     links = {
         oid: (sorted(d["conn_start"]), sorted(d.get("conn_end", [])))
@@ -204,13 +183,18 @@ def test_build_connectivity_covers_every_contact_kind() -> None:
         "w4": (["pad"], []),
         "pad": (["w4", "w5"], []),
         "w5": ([], ["pad"]),
-        "zone": (["v2"], []),
+        "zone": (["pad2", "v2"], []),
+        "pad2": (["zone"], []),
         "v2": (["w6", "zone"], []),
         "w6": ([], ["v2"]),
         "w7": ([], ["w8"]),
         "w8": (["w7"], []),
         "w9": ([], []),
         "w10": ([], []),
+        "w11": (["zone0"], []),
+        "zone0": (["w11"], []),
+        "w12": (["zone1"], []),
+        "zone1": (["w12"], []),
     }
 
 
@@ -254,3 +238,79 @@ def test_extract_network_skips_unusable_resistance(
     assert network["resistors"] == []
     assert all(s.startswith("WIRE") for s in network["skipped"])
     assert network["skipped"]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="a contact on a wire's body is moved to the nearer end",
+)
+def test_branch_off_a_wire_body_splits_its_length(cu_stack: dict[int, Any]) -> None:
+    import get_parasitic as gp
+    from connect_nets import Connect_Nets
+
+    main = wire("main", "N", [0], (0.0, 0.0), (10e-3, 0.0), 0.2e-3)
+    branch = wire("branch", "N", [0], (3e-3, 0.0), (3e-3, 5e-3), 0.2e-3)
+    items = {"main": main, "branch": branch}
+    build_connectivity(items)
+    data = Connect_Nets(items)
+    network = gp.extract_network(data, cu_stack)
+    tip = data["branch"]["net_end"][0]
+
+    distances = [
+        gp.find_path(network, data["main"][end][0], tip)[0]
+        for end in ("net_start", "net_end")
+    ]
+
+    assert distances == pytest.approx([8e-3, 12e-3])
+
+
+def _zone_network(
+    zones: list[Any], pad_centres: list[tuple[float, float]], cu_stack: dict[int, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Network of zones on layer 0 with 1 mm pads at the given centres (mm)."""
+    import get_parasitic as gp
+    from connect_nets import Connect_Nets
+
+    pads = [
+        pad(f"p{i}", "N", [0], (x * 1e-3, y * 1e-3), 0.0, _square(x, y, 0.5))
+        for i, (x, y) in enumerate(pad_centres)
+    ]
+    items = {e["id"]: e for e in [*zones, *pads]}
+    build_connectivity(items)
+    data = Connect_Nets(items)
+    return data, gp.extract_network(data, cu_stack)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="a zone links its N connections pairwise, not to a star point",
+)
+def test_zone_needs_one_resistor_per_connection(cu_stack: dict[int, Any]) -> None:
+    centres = [(x, y) for x in (2, 5, 8) for y in (3, 7)]
+    zones = [zone("z", "N", [0], _square(5, 5, 5), 1e-4)]
+
+    _data, network = _zone_network(zones, centres, cu_stack)
+
+    assert len(network["resistors"]) == len(centres)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="overlapping zones are linked but extract_network ignores it",
+)
+def test_overlapping_zones_conduct(cu_stack: dict[int, Any]) -> None:
+    import get_parasitic as gp
+
+    zones = [
+        zone("a", "N", [0], _square(5, 5, 5), 1e-4),
+        zone("b", "N", [0], _square(13, 5, 5), 1e-4),
+    ]
+
+    data, network = _zone_network(zones, [(2, 5), (16, 5)], cu_stack)
+    assert data["a"]["conn_start"] == ["p0", "b"]  # the geometry is recognised
+
+    distance = gp.find_path(
+        network, data["p0"]["net_start"][0], data["p1"]["net_start"][0]
+    )[0]
+
+    assert math.isfinite(distance)

@@ -59,9 +59,8 @@ def main() -> None:
 
         from kipy import KiCad, errors
 
-        from get_pcb_elements_ipc import Get_PCB_Elements_IPC, SelectionError
-        from get_pcb_stackup_ipc import Get_PCB_Stackup_IPC
         from parasitic import run_plugin, show_message
+        from read_board_ipc import IpcBoard
     except Exception:
         log.exception("Importing the plugin failed")
         _show_import_error(traceback.format_exc())
@@ -82,11 +81,7 @@ def main() -> None:
             sys.exit(1)
         log.debug("Board: %s", board.document.board_filename)
 
-        ItemList, net_tie_info = Get_PCB_Elements_IPC(board)
-        log.debug("Got %d elements from IPC API", len(ItemList))
-
-        CuStack = Get_PCB_Stackup_IPC(board)
-        run_plugin(ItemList, CuStack, net_tie_info)
+        run_plugin(IpcBoard(board))
         # Keep event loop alive for any open PlotFrame windows
         app.MainLoop()
     except errors.ConnectionError:
@@ -97,9 +92,6 @@ def main() -> None:
             "Parasitics",
             wx.ICON_ERROR,
         )
-    except SelectionError as e:
-        log.warning("Invalid selection: %s", e)
-        show_message(None, str(e), "Parasitics", wx.ICON_WARNING)
     except Exception:
         log.exception("Plugin failed")
         show_message(None, traceback.format_exc(), "Fatal Error", wx.ICON_ERROR)

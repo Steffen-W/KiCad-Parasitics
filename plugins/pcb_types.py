@@ -4,19 +4,83 @@
 
 from __future__ import annotations
 
-from typing import Any, TypedDict, Union
+from typing import Any, Final, Literal, TypedDict, Union
 
 # Element types (value of the "type" key in the element dicts)
-WIRE = "WIRE"
-
-VIA = "VIA"
-PAD = "PAD"
-ZONE = "ZONE"
+WIRE: Final = "WIRE"
+VIA: Final = "VIA"
+PAD: Final = "PAD"
+ZONE: Final = "ZONE"
 
 # Layer indices used in the coil-generator JSON format (not KiCad layer IDs).
 # plot_pcb.py maps these to colours: 0 → red (top), 2 → blue (bottom).
 TOP_LAYER = 0
 BOTTOM_LAYER = 2
+
+# x, y in m
+Point = tuple[float, float]
+
+
+# ---------------------------------------------------------------------------
+# Board elements, as read from KiCad (see board_model.py)
+# ---------------------------------------------------------------------------
+
+
+class _ElementBase(TypedDict):
+    id: str  # KiCad UUID
+    net: str  # net name
+    layer: list[int]  # copper layers, KiCad layer IDs
+    area: float  # copper area in m²
+    is_selected: bool
+    conn_start: list[str]  # IDs of touching elements (at the start of a wire)
+
+
+class _WireBase(_ElementBase):
+    type: Literal["WIRE"]
+    start: Point
+    end: Point
+    width: float
+    length: float  # along the midline
+    midline_pts: list[Point]  # start … end; intermediate points follow an arc
+    conn_end: list[str]  # IDs of elements touching the end
+
+
+class WireElement(_WireBase, total=False):
+    """A straight track, or an arc through mid with signed sweep angle (rad).
+
+    radius is missing for an arc whose three points are collinear.
+    """
+
+    mid: Point
+    radius: float
+    angle: float
+
+
+class ViaElement(_ElementBase):
+    type: Literal["VIA"]
+    position: Point
+    width: float  # pad diameter
+    drill: float
+
+
+class PadElement(_ElementBase):
+    type: Literal["PAD"]
+    position: Point
+    drill: float  # 0 for SMD pads
+    outline: list[Point]  # copper outline on the first copper layer
+
+
+class ZoneElement(_ElementBase):
+    type: Literal["ZONE"]
+    outline: list[Point]
+
+
+BoardElement = Union[WireElement, ViaElement, PadElement, ZoneElement]
+
+
+# ---------------------------------------------------------------------------
+# Resistance network
+# ---------------------------------------------------------------------------
 
 
 class _NetworkElementBase(TypedDict):

@@ -21,6 +21,16 @@ mypy plugins
 ruff check --fix --unsafe-fixes && ruff format
 ```
 
+### Board input
+
+Both plugins read the board the same way; only the API access differs. An adapter per API (`read_board_pcbnew.py`, `read_board_ipc.py`) implements `BoardSource` from `board_model.py` and only converts KiCad objects into the element dicts of `pcb_types.py` (lengths in m, layers as KiCad layer IDs, UUID strings as IDs). `read_board()` then applies the shared rules:
+
+1. **Selection**: exactly two copper items with a net; a single selected footprint with two pads stands for its pads.
+2. **Nets**: the net of the first item plus every net that Net Tie footprints join to it, transitively. The second item must belong to one of them. Only the copper of these nets is read from KiCad.
+3. **Copper**: tracks, arcs, vias, pads, copper zones (no rule areas or teardrops) and the copper of the involved Net Ties (segments and arcs as tracks, polygons as zones). Pads and zones are described by their outline.
+4. **Connectivity** (`connectivity.py`): elements touch on a shared layer when wire ends or via/pad centres overlap, such a point lies on a wire or within a pad or zone outline, a wire crosses an outline, or two outlines overlap. KiCad's own connectivity is not used, since the IPC API does not provide it.
+5. **Stackup**: copper and dielectric layers from top to bottom, from the IPC API or, for pcbnew, whose Python API lacks the stackup, from the saved board file. Without a usable stackup, a two-layer FR4 board is assumed.
+
 ## API Support
 
 - **pcbnew API** (KiCad 9+, deprecated by KiCad): The classic scripting API, runs as a KiCad plugin inside the PCB editor. Works without further setup.
@@ -37,7 +47,7 @@ The simulation uses the ngspice library: a system installation, else the one bun
 
 # How It Works
 
-Select exactly two elements (pads or vias) that belong to the **same net**. The plugin then:
+Select exactly two elements (pads or vias) that belong to the **same net**, or to nets joined by a Net Tie footprint. The plugin then:
 
 1. **Extracts all traces** in that net and builds a resistance network
 2. **Calculates wire resistance** based on trace length, width, and copper thickness from the stackup
@@ -117,7 +127,8 @@ Requires additional packages: `bfieldtools`, `shapely`, `triangle`, `trimesh`, `
 - **Inductance – shortest path only**: Calc Inductance uses only the shortest path between the two selected points. Parallel paths or alternative routes are ignored.
 - **Inductance – no plane influence**: Metal planes (ground, power) near the trace reduce the effective loop inductance. This effect is currently not modelled.
 - **Inductance – arcs**: Arc tracks are treated as straight lines (chord) for the inductance mesh.
-- **IPC API – no native connectivity**: The IPC API does not provide connectivity data (unlike pcbnew's `CONNECTIVITY_DATA`). Connections are determined by geometric coordinate matching. This may reduce performance on very large nets (please open an issue if this is noticeable). Additionally, traces that connect mid-segment (not at a track endpoint) are currently not detected as connected.
+- **Connectivity from geometry**: Connections are determined from shapes and positions, not from KiCad's connectivity data (see [Board input](#board-input)). Zones count by their outline, not their fill, so copper inside a zone outline is connected to the zone even where the fill is cut away.
+- **pcbnew stackup**: The pcbnew plugin reads the stackup from the saved board file; unsaved stackup changes are not used.
 
 <img width="825" height="713" alt="grafik" src="https://github.com/user-attachments/assets/eae13447-8f02-461b-81b4-e6a2fd24f130" />
 

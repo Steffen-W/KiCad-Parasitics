@@ -9,6 +9,7 @@ import re
 import time
 import traceback
 import warnings
+from collections.abc import Sequence
 from typing import Any, TextIO
 
 import wx
@@ -58,8 +59,10 @@ try:
 except ImportError:
     from network_display import format_network_info
 try:
+    from .board_model import BoardSource, SelectionError, read_board
     from .pcb_types import CuLayer
 except ImportError:
+    from board_model import BoardSource, SelectionError, read_board
     from pcb_types import CuLayer
 
 log = logging.getLogger(__name__)
@@ -93,7 +96,7 @@ def _build_path_error(
             if in_graph
             else "NOT in graph"
         )
-        return f"  {label}: {elem.get('type', '?')}  net={elem.get('net_name', '?')!r}  layer={layer_names(elem)}  node={conn}  {status}"
+        return f"  {label}: {elem.get('type', '?')}  net={elem.get('net', '?')!r}  layer={layer_names(elem)}  node={conn}  {status}"
 
     in1, in2 = conn1 in graph, conn2 in graph
     if not in1 and not in2:
@@ -136,7 +139,7 @@ def analyze_pcb_parasitic(
 
     Args:
         data: PCB element data from Connect_Nets()
-        CuStack: Copper stackup from Get_PCB_Stackup_fun()
+        CuStack: Copper stackup (see board_model.build_cu_stack)
         element1, element2: Selected element dicts
         frequencies: List of frequencies for AC analysis (Hz)
         progress: reports each analysis stage; see Progress
@@ -283,9 +286,13 @@ def _best_connection(
 def format_result_message(
     result: dict[str, Any],
     CuStack: dict[int, CuLayer],
-    net_tie_info: dict[str, Any] | None = None,
+    net_ties: Sequence[str] = (),
+    nets: Sequence[str] = (),
 ) -> str:
-    """Format analysis result as human-readable message."""
+    """Format analysis result as human-readable message.
+
+    net_ties lists the Net Ties joining `nets`, the nets that were analyzed.
+    """
     lines = []
     if result["skipped"]:
         lines += [
@@ -299,14 +306,9 @@ def format_result_message(
     if result["error"]:
         return "\n".join([*lines, str(result["error"])])
 
-    if net_tie_info:
-        lines.append("Net tie:")
-        for ref in net_tie_info["refs"]:
-            lines.append(f"  {ref}")
-        lines.append("Bridged nets:")
-        for net in net_tie_info["nets"]:
-            lines.append(f"  {net}")
-        lines.append("")
+    if net_ties:
+        lines += ["Net tie:", *(f"  {ref}" for ref in net_ties)]
+        lines += ["Bridged nets:", *(f"  {net}" for net in nets), ""]
 
     Distance = result["distance"]
     short_path_RES = result["short_path_resistance"]
@@ -734,105 +736,92 @@ def _enable_crash_log() -> None:
     faulthandler.enable(file=_crash_log, all_threads=True)
 
 
-def run_plugin(
-    ItemList: dict[Any, Any],
-    CuStack: dict[int, CuLayer],
-    net_tie_info: dict[str, Any] | None = None,
-) -> None:
+def run_plugin(source: BoardSource) -> None:
+    """Analyze the selection on the board and show the result."""
     _enable_crash_log()
+    parent = wx.GetActiveWindow()
     try:
+        try:
+            board = read_board(source)
+        except SelectionError as e:
+            log.warning("Invalid selection: %s", e)
+            show_message(parent, str(e), "Parasitics", wx.ICON_WARNING)
+            return
         plugin_path = os.path.dirname(os.path.abspath(__file__))
 
-        log.info("Found %d PCB elements", len(ItemList))
-
-        data = Connect_Nets(ItemList)
+        data = Connect_Nets(board.elements)
 
         if os.environ.get("PARASITIC_DEBUG"):
             save_file = os.path.join(plugin_path, "debug_ItemList.json")
             SaveDictToFile(data, save_file)
 
-        # Get selected elements
-        Selected = [d for d in data.values() if d["is_selected"]]
-        log.info("Found %d selected elements", len(Selected))
-
-        analysis_result = None
-
-        if len(Selected) != 2:
-            message = "You have to mark exactly two elements. Preferably pads or vias."
-            network_debug_text = None
-        else:
-            frequencies = [1e3, 10e3, 100e3, 1e6, 10e6, 100e6, 1e9]
-            parent = wx.GetActiveWindow()
-            with wx.ProgressDialog(
-                "Parasitics",
-                "Analyzing network…",
-                parent=parent,
-                style=wx.PD_APP_MODAL | wx.PD_CAN_ABORT | wx.PD_ELAPSED_TIME,
-            ) as busy:
-                busy.SetWindowStyleFlag(
-                    busy.GetWindowStyleFlag() | _orphan_on_top(parent)
+        element1, element2 = (d for d in data.values() if d["is_selected"])
+        with wx.ProgressDialog(
+            "Parasitics",
+            "Analyzing network…",
+            parent=parent,
+            style=wx.PD_APP_MODAL | wx.PD_CAN_ABORT | wx.PD_ELAPSED_TIME,
+        ) as busy:
+            busy.SetWindowStyleFlag(busy.GetWindowStyleFlag() | _orphan_on_top(parent))
+            try:
+                result = analyze_pcb_parasitic(
+                    data,
+                    board.cu_stack,
+                    element1,
+                    element2,
+                    frequencies=[1e3, 10e3, 100e3, 1e6, 10e6, 100e6, 1e9],
+                    progress=_dialog_progress(busy),
                 )
-                try:
-                    result = analyze_pcb_parasitic(
-                        data,
-                        CuStack,
-                        Selected[0],
-                        Selected[1],
-                        frequencies=frequencies,
-                        progress=_dialog_progress(busy),
+            except CancelledError:
+                log.info("Analysis cancelled")
+                return
+
+        if result["network_info"] and log.isEnabledFor(logging.INFO):
+            try:
+                with open(
+                    os.path.join(plugin_path, "debug_network_info.json"),
+                    "w",
+                    encoding="utf-8",
+                ) as f:
+                    cleaned = [
+                        {k: v for k, v in e.items() if k != "hf"}
+                        for e in result["network_info"]
+                    ]
+                    txt = json.dumps(cleaned, indent=1)
+                    # Collapse short arrays (coordinates etc.) onto single lines
+                    txt = re.sub(
+                        r"\[\s+(-?[\d.e+\-]+),\s+(-?[\d.e+\-]+)\s+\]",
+                        r"[\1, \2]",
+                        txt,
                     )
-                except CancelledError:
-                    log.info("Analysis cancelled")
-                    return
+                    f.write(txt)
+            except (OSError, TypeError, ValueError):
+                log.warning("Writing debug_network_info.json failed", exc_info=True)
 
-            # Save debug info
-            if result["network_info"] and log.isEnabledFor(logging.INFO):
-                try:
-                    with open(
-                        os.path.join(plugin_path, "debug_network_info.json"),
-                        "w",
-                        encoding="utf-8",
-                    ) as f:
-                        cleaned = [
-                            {k: v for k, v in e.items() if k != "hf"}
-                            for e in result["network_info"]
-                        ]
-                        txt = json.dumps(cleaned, indent=1)
-                        # Collapse short arrays (coordinates etc.) onto single lines
-                        txt = re.sub(
-                            r"\[\s+(-?[\d.e+\-]+),\s+(-?[\d.e+\-]+)\s+\]",
-                            r"[\1, \2]",
-                            txt,
-                        )
-                        f.write(txt)
-                except (OSError, TypeError, ValueError):
-                    log.warning("Writing debug_network_info.json failed", exc_info=True)
-
-            message = format_result_message(result, CuStack, net_tie_info=net_tie_info)
-            network_debug_text = None
-            if result["network_info"]:
-                network_debug_text = (
-                    result["network_info"],
-                    result["graph"],
-                    result["path"],
-                    result["conn1"],
-                    result["conn2"],
-                )
-            analysis_result = result
+        message = format_result_message(
+            result, board.cu_stack, net_ties=board.net_ties, nets=board.nets
+        )
+        network_debug_text = None
+        if result["network_info"]:
+            network_debug_text = (
+                result["network_info"],
+                result["graph"],
+                result["path"],
+                result["conn1"],
+                result["conn2"],
+            )
 
         log.info("Opening dialog")
         dlg = ResultDialog(
-            wx.GetActiveWindow(),
+            parent,
             message,
             network_debug_text,
-            analysis_result=analysis_result,
-            cu_stack=CuStack,
+            analysis_result=result,
+            cu_stack=board.cu_stack,
         )
         dlg.ShowModal()
         dlg.Destroy()
 
     except Exception:
         log.exception("Fatal error")
-        show_message(
-            wx.GetActiveWindow(), traceback.format_exc(), "Fatal Error", wx.ICON_ERROR
-        )
+        show_message(parent, traceback.format_exc(), "Fatal Error", wx.ICON_ERROR)

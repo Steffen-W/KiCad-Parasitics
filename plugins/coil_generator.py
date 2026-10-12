@@ -7,10 +7,10 @@ import json
 import math
 import os
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, cast
 
-from get_pcb_elements_ipc import _arc_geometry, _arc_points, _outline_from_midline
-from pcb_types import BOTTOM_LAYER, PAD, TOP_LAYER, VIA, WIRE
+from board_model import pad, via, wire
+from pcb_types import BOTTOM_LAYER, TOP_LAYER, BoardElement
 
 Item = dict[str, Any]
 NodeMap = dict[int, int]
@@ -43,26 +43,21 @@ def new_context() -> _IdContext:
     return _IdContext()
 
 
-def _base_item(typ: str, layer: int, ctx: _IdContext) -> Item:
-    return {
-        "type": typ,
-        "id": ctx.new_id(),
-        "layer": [layer],
-        "net_name": "",
-        "net_code": "",
-        "is_selected": False,
-    }
+def _with_nodes(element: BoardElement, **nodes: dict[int, int]) -> Item:
+    """The element as a plain dict, with preset node IDs (see Connect_Nets)."""
+    item = cast(Item, element)
+    item.update(nodes)
+    return item
 
 
 def make_pad(
     pos: Pos2D,
     width: float = 0.0002,
     layer: int = 0,
-    name: str = "",
     *,
     ctx: _IdContext | None = None,
 ) -> tuple[Item, int]:
-    """Create a PAD at *pos*.
+    """Create a square SMD PAD at *pos*.
 
     ctx defaults to a fresh, throwaway context when omitted -- fine for
     one-off/interactive use, but pass a shared ctx when chaining IDs/nodes
@@ -70,26 +65,11 @@ def make_pad(
     """
     ctx = ctx if ctx is not None else new_context()
     x, y = pos
-    node = ctx.new_node()
     r = width / 2
-    item = _base_item(PAD, layer, ctx)
-    item.update(
-        {
-            "position": (x, y),
-            "size": (width, width),
-            "PadName": name,
-            "conn_start": [],
-            "net_start": {layer: node},
-            "_outline": [
-                (x - r, y - r),
-                (x + r, y - r),
-                (x + r, y + r),
-                (x - r, y + r),
-            ],
-            "area": width * width,
-        }
-    )
-    return item, node
+    square = [(x - r, y - r), (x + r, y - r), (x + r, y + r), (x - r, y + r)]
+    node = ctx.new_node()
+    element = pad(ctx.new_id(), "", [layer], pos, 0.0, square)
+    return _with_nodes(element, net_start={layer: node}), node
 
 
 def make_wire(
@@ -102,9 +82,10 @@ def make_wire(
     node_start: int | None = None,
     node_end: int | None = None,
     *,
+    mid: Pos2D | None = None,
     ctx: _IdContext | None = None,
 ) -> tuple[Item, int, int]:
-    """Create a straight WIRE.
+    """Create a WIRE, an arc if it passes through *mid*.
 
     ctx defaults to a fresh, throwaway context when omitted -- fine for
     one-off/interactive use, but pass a shared ctx when chaining IDs/nodes
@@ -113,87 +94,8 @@ def make_wire(
     ctx = ctx if ctx is not None else new_context()
     ns = node_start if node_start is not None else ctx.new_node()
     ne = node_end if node_end is not None else ctx.new_node()
-    dx, dy = x2 - x1, y2 - y1
-    length = math.hypot(dx, dy) or 1e-30
-    wr = width / 2
-    nx, ny = -dy / length * wr, dx / length * wr
-    item = _base_item(WIRE, layer, ctx)
-    item.update(
-        {
-            "start": (x1, y1),
-            "end": (x2, y2),
-            "width": width,
-            "length": length,
-            "area": width * length,
-            "conn_start": [],
-            "conn_end": [],
-            "net_start": {layer: ns},
-            "net_end": {layer: ne},
-            "midline_pts": [(x1, y1), (x2, y2)],
-            "_outline": [
-                (x1 + nx, y1 + ny),
-                (x2 + nx, y2 + ny),
-                (x2 - nx, y2 - ny),
-                (x1 - nx, y1 - ny),
-            ],
-        }
-    )
-    return item, ns, ne
-
-
-def make_arc(
-    x_start: float,
-    y_start: float,
-    x_end: float,
-    y_end: float,
-    x_mid: float,
-    y_mid: float,
-    width: float = 0.0002,
-    layer: int = 0,
-    node_start: int | None = None,
-    node_end: int | None = None,
-    *,
-    ctx: _IdContext | None = None,
-) -> tuple[Item, int, int]:
-    """Create an arc WIRE via three points.
-
-    ctx defaults to a fresh, throwaway context when omitted -- fine for
-    one-off/interactive use, but pass a shared ctx when chaining IDs/nodes
-    across multiple make_*/generate_* calls.
-    """
-    ctx = ctx if ctx is not None else new_context()
-    start, end, mid = (x_start, y_start), (x_end, y_end), (x_mid, y_mid)
-    angle, arc_length, circle = _arc_geometry(start, end, mid)
-
-    ns = node_start if node_start is not None else ctx.new_node()
-    ne = node_end if node_end is not None else ctx.new_node()
-
-    midline: list[Pos2D] = [start, end]
-    if circle is not None:
-        midline = [start] + _arc_points(
-            circle.center, circle.radius, circle.start_angle, angle, width
-        )
-
-    item = _base_item(WIRE, layer, ctx)
-    item.update(
-        {
-            "start": start,
-            "end": end,
-            "mid": mid,
-            "radius": circle.radius if circle is not None else None,
-            "angle": angle,
-            "width": width,
-            "length": arc_length,
-            "area": width * arc_length,
-            "conn_start": [],
-            "conn_end": [],
-            "net_start": {layer: ns},
-            "net_end": {layer: ne},
-            "midline_pts": midline,
-            "_outline": _outline_from_midline(midline, width / 2),
-        }
-    )
-    return item, ns, ne
+    element = wire(ctx.new_id(), "", [layer], (x1, y1), (x2, y2), width, mid)
+    return _with_nodes(element, net_start={layer: ns}, net_end={layer: ne}), ns, ne
 
 
 def make_via(
@@ -204,7 +106,7 @@ def make_via(
     *,
     ctx: _IdContext | None = None,
 ) -> tuple[Item, NodeMap]:
-    """Create a VIA at (*x*, *y*).
+    """Create a VIA at (*x*, *y*) with a pad twice the drill.
 
     ctx defaults to a fresh, throwaway context when omitted -- fine for
     one-off/interactive use, but pass a shared ctx when chaining IDs/nodes
@@ -213,24 +115,9 @@ def make_via(
     ctx = ctx if ctx is not None else new_context()
     if layers is None:
         layers = [TOP_LAYER, BOTTOM_LAYER]
-    nodes: NodeMap = {}
-    net_start: dict[int, int] = {}
-    for ly in layers:
-        n = ctx.new_node()
-        nodes[ly] = n
-        net_start[ly] = n
-    item: Item = {
-        "type": VIA,
-        "id": ctx.new_id(),
-        "position": (x, y),
-        "drill": drill,
-        "layer": layers,
-        "net_name": "",
-        "net_code": "",
-        "is_selected": False,
-        "net_start": net_start,
-    }
-    return item, nodes
+    nodes: NodeMap = {ly: ctx.new_node() for ly in layers}
+    element = via(ctx.new_id(), "", layers, (x, y), 2 * drill, drill)
+    return _with_nodes(element, net_start=dict(nodes)), nodes
 
 
 def items_to_dict(items: list[Item]) -> dict[str, Item]:
@@ -279,11 +166,11 @@ class _CoilBuilder:
         self,
         ex: float,
         ey: float,
-        make_fn: Callable[..., Any] = make_wire,
+        mid: Pos2D | None = None,
         node_end: int | None = None,
-        **kw: Any,
     ) -> None:
-        item, _, ne = make_fn(
+        """Continue to (ex, ey), along an arc if mid is given."""
+        item, _, ne = make_wire(
             self.px,
             self.py,
             ex,
@@ -292,8 +179,8 @@ class _CoilBuilder:
             layer=self.layer,
             node_start=self.prev_node,
             node_end=node_end,
+            mid=mid,
             ctx=self._ctx,
-            **kw,
         )
         self.items.append(item)
         self.prev_node = ne
@@ -316,18 +203,12 @@ class _CoilBuilder:
         return self.px, self.py
 
     def reverse(self) -> _CoilBuilder:
-        """Reverse winding direction in-place.
-
-        The outline polygon is reversed in point order only (not rebuilt), which
-        has no geometric effect but keeps its orientation consistent with the
-        reversed midline.
-        """
+        """Reverse winding direction in-place."""
         for item in self.items:
             item["start"], item["end"] = item["end"], item["start"]
             item["net_start"], item["net_end"] = item["net_end"], item["net_start"]
             item["conn_start"], item["conn_end"] = item["conn_end"], item["conn_start"]
             item["midline_pts"] = item["midline_pts"][::-1]
-            item["_outline"] = item["_outline"][::-1]
         self.items.reverse()
         self._start_pos, (self.px, self.py) = (self.px, self.py), self._start_pos
         self._start_node, self.prev_node = self.prev_node, self._start_node
@@ -345,7 +226,6 @@ class _CoilBuilder:
             if "mid" in item:
                 item["mid"] = _flip(item["mid"])
             item["midline_pts"] = [_flip(p) for p in item["midline_pts"]]
-            item["_outline"] = [_flip(p) for p in item["_outline"]]
         self._start_pos = _flip(self._start_pos)
         self.px, self.py = _flip((self.px, self.py))
         return self
@@ -362,7 +242,6 @@ class _CoilBuilder:
             if "mid" in item:
                 item["mid"] = _flip(item["mid"])
             item["midline_pts"] = [_flip(p) for p in item["midline_pts"]]
-            item["_outline"] = [_flip(p) for p in item["_outline"]]
         self._start_pos = _flip(self._start_pos)
         self.px, self.py = _flip((self.px, self.py))
         return self
@@ -381,7 +260,6 @@ class _CoilBuilder:
             if "mid" in item:
                 item["mid"] = _shift(item["mid"])
             item["midline_pts"] = [_shift(p) for p in item["midline_pts"]]
-            item["_outline"] = [_shift(p) for p in item["_outline"]]
             if new_layer != self.layer:
                 old_ns = item["net_start"].pop(self.layer, None)
                 old_ne = item["net_end"].pop(self.layer, None)
@@ -448,9 +326,10 @@ def generate_circular_coil(
         cb.add(
             r2 * math.cos(a1 + d_angle),
             r2 * math.sin(a1 + d_angle),
-            make_arc,
-            x_mid=r_mid * math.cos(a1 + d_angle / 2),
-            y_mid=r_mid * math.sin(a1 + d_angle / 2),
+            mid=(
+                r_mid * math.cos(a1 + d_angle / 2),
+                r_mid * math.sin(a1 + d_angle / 2),
+            ),
         )
     return cb
 
@@ -551,7 +430,7 @@ def generate_rounded_rectangular_coil(
         ]
         for (sx, sy), (mx, my), (ax, ay) in corners:
             cb.add(sx, sy)
-            cb.add(ax, ay, make_arc, x_mid=mx, y_mid=my)
+            cb.add(ax, ay, mid=(mx, my))
 
     return cb
 
@@ -614,9 +493,10 @@ def generate_elliptical_coil(
         cb.add(
             rx2 * math.cos(a1 + d_angle),
             ry2 * math.sin(a1 + d_angle),
-            make_arc,
-            x_mid=rx_mid * math.cos(a1 + d_angle / 2),
-            y_mid=ry_mid * math.sin(a1 + d_angle / 2),
+            mid=(
+                rx_mid * math.cos(a1 + d_angle / 2),
+                ry_mid * math.sin(a1 + d_angle / 2),
+            ),
         )
     return cb
 
@@ -664,8 +544,8 @@ if __name__ == "__main__":
             ctx=ctx,
         ).move((0.013, 0.006)),
     ]:
-        pad1, _ = make_pad(cb.start_pos, width=w, name="1", layer=cb.layer, ctx=ctx)
-        pad2, _ = make_pad(cb.end_pos, width=w, name="2", layer=cb.layer, ctx=ctx)
+        pad1, _ = make_pad(cb.start_pos, width=w, layer=cb.layer, ctx=ctx)
+        pad2, _ = make_pad(cb.end_pos, width=w, layer=cb.layer, ctx=ctx)
         items += [pad1] + cb.result() + [pad2]
 
     # Two-layer coil: Pad1 (outer, top) → inner → wire → via → inner (bot) → Pad2 (outer, bot)
@@ -686,8 +566,8 @@ if __name__ == "__main__":
         tx, ty, bx, by, width=w, layer=BOTTOM_LAYER, node_start=top.end_node, ctx=ctx
     )
     via_item, _node_map = make_via(tx, ty, layers=[TOP_LAYER, BOTTOM_LAYER], ctx=ctx)
-    pad1, _ = make_pad(top.start_pos, width=w, name="1", layer=TOP_LAYER, ctx=ctx)
-    pad2, _ = make_pad(bot.end_pos, width=w, name="2", layer=BOTTOM_LAYER, ctx=ctx)
+    pad1, _ = make_pad(top.start_pos, width=w, layer=TOP_LAYER, ctx=ctx)
+    pad2, _ = make_pad(bot.end_pos, width=w, layer=BOTTOM_LAYER, ctx=ctx)
     items += [pad1] + top.result() + [wire, via_item] + bot.result() + [pad2]
 
     save_json(items)

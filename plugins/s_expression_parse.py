@@ -1,7 +1,8 @@
 import re
 from typing import Any
 
-term_regex = r"""(?mx)
+_TERM = re.compile(
+    r"""(?mx)
     \s*(?:
         (?P<brackl>\()|
         (?P<brackr>\))|
@@ -9,50 +10,34 @@ term_regex = r"""(?mx)
         (?P<sq>"(?:(?:\\")|[^"])*")|
         (?P<s>[^(^)\s]+)
        )"""
+)
 
 
-def parse_sexp(sexp: str) -> list[Any]:
+def parse_sexp(sexp: str, pos: int = 0) -> list[Any]:
+    """The first complete S-expression in `sexp` from index `pos` on.
+
+    Raises:
+        ValueError: brackets do not match before the expression is complete
+    """
     stack: list[list[Any]] = []
     out: list[Any] = []
-    for termtypes in re.finditer(term_regex, sexp):
-        term, value = next((t, v) for t, v in termtypes.groupdict().items() if v)
+    for match in _TERM.finditer(sexp, pos):
+        term, value = match.lastgroup, match.group(match.lastgroup or 0)
         if term == "brackl":
             stack.append(out)
             out = []
         elif term == "brackr":
             if not stack:
                 raise ValueError("Unmatched closing bracket in S-expression")
-            tmpout, out = out, stack.pop(-1)
-            out.append(tmpout)
+            done, out = out, stack.pop()
+            if not stack:
+                return done
+            out.append(done)
         elif term == "num":
             v = float(value)
-            if v.is_integer():
-                v = int(v)
-            out.append(v)
+            out.append(int(v) if v.is_integer() else v)
         elif term == "sq":
             out.append(value[1:-1])
-        elif term == "s":
-            out.append(value)
         else:
-            raise NotImplementedError(f"Error: {term!r}, {value!r}")
-    if stack:
-        raise ValueError("Unclosed bracket in S-expression")
-    result: list[Any] = out[0]
-    return result
-
-
-if __name__ == "__main__":
-    sexp = """(sym_lib_table
-  (version 7)
-  (lib (name "4xxx")(type "KiCad")(uri "${KICAD7_SYMBOL_DIR}/4xxx.kicad_sym")(options "")(descr "4xxx series symbols"))
-  (lib (name "4xxx_IEEE")(type "KiCad")(uri "${KICAD7_SYMBOL_DIR}/4xxx_IEEE.kicad_sym")(options "")(descr "4xxx series IEEE symbols"))
-  (lib (name "74xGxx")(type "KiCad")(uri "${KICAD7_SYMBOL_DIR}/74xGxx.kicad_sym")(options "")(descr "74xGxx symbols"))
-  (lib (name "74xx")(type "KiCad")(uri "${KICAD7_SYMBOL_DIR}/74xx.kicad_sym")(options "")(descr "74xx symbols"))
-  (lib (name "74xx_IEEE")(type "KiCad")(uri "${KICAD7_SYMBOL_DIR}/74xx_IEEE.kicad_sym")(options "")(descr "74xx series IEEE symbols"))
-  )"""
-
-    parsed = parse_sexp(sexp)
-    for line in parsed:
-        if isinstance(line, list) and line[0] == "lib":
-            for item in line:
-                print(item)
+            out.append(value)
+    raise ValueError("Incomplete S-expression")

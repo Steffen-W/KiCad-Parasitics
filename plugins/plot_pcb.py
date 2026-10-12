@@ -44,17 +44,11 @@ def plot_items(data: dict[str, Any]) -> None:
     for d in data.values():
         typ = d["type"]
         color = _color(d.get("layer", []))
-        outline = d.get("_outline")
+        outline = d.get("outline")
 
         if typ == WIRE:
             w = d.get("width", 0)
             r = w / 2 * 1e3
-
-            if outline and len(outline) >= 3:
-                pts = [(p[0] * 1e3, p[1] * 1e3) for p in outline]
-                ax.add_patch(
-                    Polygon(pts, closed=True, fc=color, ec=color, alpha=0.15, lw=0.3)
-                )
 
             midline = d.get("midline_pts")
             if midline and len(midline) >= 2:
@@ -105,27 +99,9 @@ def plot_items(data: dict[str, Any]) -> None:
                         lw=0.5,
                     )
                 )
-            else:
-                sx, sy = d.get("size", (0.001, 0.001))
-                r = max(sx, sy) / 2 * 1e3
-                ax.add_patch(
-                    Circle((px, py), r, fc="gold", ec="darkgoldenrod", alpha=0.3)
-                )
-
-            ax.text(
-                px,
-                py,
-                d.get("PadName", ""),
-                fontsize=12,
-                ha="center",
-                va="top",
-                zorder=8,
-            )
 
             if d.get("is_selected"):
-                sx, sy = d.get("size", (0.001, 0.001))
-                r = max(sx, sy) / 2 * 1e3
-                ax.add_patch(Circle((px, py), r, fc="none", ec="lime", lw=2, zorder=10))
+                ax.plot(px, py, "o", color="lime", ms=8, zorder=10)
 
             for layer in d.get("layer", []):
                 ns = d.get("net_start", {})

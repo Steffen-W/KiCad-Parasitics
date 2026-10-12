@@ -23,8 +23,11 @@ _WIRE_SIDES: _Sides = (
 _POINT_SIDES: _Sides = (("net_start", "conn_start", "position"),)
 
 
-def Connect_Nets(data: dict[Any, dict[str, Any]]) -> dict[Any, dict[str, Any]]:
+def Connect_Nets(data: dict[Any, Any]) -> dict[Any, dict[str, Any]]:
     """Assign a node ID to every element endpoint; touching endpoints share one.
+
+    `data` holds connected board elements (see pcb_types.BoardElement), which
+    gain the node IDs as net_start/net_end: {layer: node}.
 
     Wires have a start and an end endpoint per layer, pads and vias a single one
     ("net_end" mirrors "net_start"). Zones are connected later in get_parasitic.
