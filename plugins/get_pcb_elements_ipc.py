@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import math
+from collections import defaultdict
 from typing import Any, NamedTuple
 
 from kipy.board import Board
@@ -758,7 +759,13 @@ def _outline_from_midline(
     return left + right[::-1]
 
 
-def _compute_bbox(d: dict[str, Any]) -> tuple[float, float, float, float]:
+BBox = tuple[float, float, float, float]
+
+# Extra distance at which two connection points still count as touching.
+_CONTACT_TOL_M = 1e-9
+
+
+def _compute_bbox(d: dict[str, Any]) -> BBox:
     """Compute bounding box (min_x, min_y, max_x, max_y) for an element."""
     if "_outline" in d:
         xs = [p[0] for p in d["_outline"]]
@@ -778,11 +785,54 @@ def _compute_bbox(d: dict[str, Any]) -> tuple[float, float, float, float]:
     return (0, 0, 0, 0)
 
 
-def _bboxes_overlap(
-    a: tuple[float, float, float, float], b: tuple[float, float, float, float]
-) -> bool:
+def _bboxes_overlap(a: BBox, b: BBox) -> bool:
     """Check if two bounding boxes overlap."""
     return a[0] <= b[2] and a[2] >= b[0] and a[1] <= b[3] and a[3] >= b[1]
+
+
+class _BBoxGrid:
+    """Uniform grid over bounding boxes for overlap queries.
+
+    The cell size is the median box extent, so most boxes occupy one to four
+    cells. A box spanning more cells than there are boxes is cheaper to test
+    on every query than to enter into the grid, so it is kept aside. Results
+    come in insertion order, so callers visit candidates in the same order as
+    a scan over all boxes.
+    """
+
+    def __init__(self, boxes: list[BBox]) -> None:
+        self._boxes = boxes
+        extents = sorted(max(b[2] - b[0], b[3] - b[1]) for b in boxes)
+        # Any positive size is correct; it only affects speed.
+        self._cell = (extents[len(extents) // 2] if extents else 0.0) or 1e-3
+        self._cells: defaultdict[tuple[int, int], list[int]] = defaultdict(list)
+        self._large: list[int] = []
+        for i, box in enumerate(boxes):
+            xs, ys = self._spans(box)
+            if len(xs) * len(ys) > len(boxes):
+                self._large.append(i)
+                continue
+            for x in xs:
+                for y in ys:
+                    self._cells[x, y].append(i)
+
+    def _spans(self, box: BBox) -> tuple[range, range]:
+        c = self._cell
+        return (
+            range(math.floor(box[0] / c), math.floor(box[2] / c) + 1),
+            range(math.floor(box[1] / c), math.floor(box[3] / c) + 1),
+        )
+
+    def overlapping(self, box: BBox) -> list[int]:
+        """Indices of all boxes overlapping `box`, in insertion order."""
+        xs, ys = self._spans(box)
+        if len(xs) * len(ys) <= len(self._cells):
+            keys = [(x, y) for x in xs for y in ys]
+        else:  # box covers more cells than are occupied: scan those instead
+            keys = [k for k in self._cells if k[0] in xs and k[1] in ys]
+        found = {i for key in keys for i in self._cells.get(key, ())}
+        found.update(self._large)
+        return sorted(i for i in found if _bboxes_overlap(self._boxes[i], box))
 
 
 def _point_in_pad(
@@ -832,7 +882,7 @@ def _build_connectivity(ItemList: dict[Any, Any]) -> None:
     # TODO: Split into named sub-steps with guard clauses; function currently
     # implements 3 separate algorithms inline and is ~210 lines deep.
 
-    Uses bounding boxes for fast pre-filtering, then:
+    Bounding-box grids select the candidates, then:
     - Point-to-point: distance <= r_i + r_j (sum of radii)
     - Point-in-pad: shape-aware test (circle/rect/oval)
     - Point-in-zone: ray casting with margin
@@ -868,7 +918,7 @@ def _build_connectivity(ItemList: dict[Any, Any]) -> None:
             r = min(sx, sy) / 2 if sx and sy else d.get("drill", 0) / 2
             points.append((d["position"], oid, "position", r))
 
-    def _add_conn(oid_a: int, ep_a: str, oid_b: int, ep_b: str) -> None:
+    def _add_conn(oid_a: str, ep_a: str, oid_b: str, ep_b: str) -> None:
         """Add bidirectional connection."""
         key_a = "conn_start" if ep_a in ("start", "position") else "conn_end"
         if oid_b not in ItemList[oid_a][key_a]:
@@ -877,15 +927,25 @@ def _build_connectivity(ItemList: dict[Any, Any]) -> None:
         if oid_a not in ItemList[oid_b][key_b]:
             ItemList[oid_b][key_b].append(oid_a)
 
+    point_grid = _BBoxGrid(
+        [(p[0] - r, p[1] - r, p[0] + r, p[1] + r) for p, _, _, r in points]
+    )
+    pad_oids = list(pads)
+    pad_grid = _BBoxGrid([bboxes[oid] for oid in pad_oids])
+
     # Point-to-point matching (Wire endpoints, Via/Pad positions)
-    for i in range(len(points)):
-        pos_i, oid_i, ep_i, r_i = points[i]
-        for j in range(i + 1, len(points)):
+    for i, (pos_i, oid_i, ep_i, r_i) in enumerate(points):
+        # Twice the tolerance, so rounding cannot drop a candidate.
+        reach = r_i + 2 * _CONTACT_TOL_M
+        query = (pos_i[0] - reach, pos_i[1] - reach, pos_i[0] + reach, pos_i[1] + reach)
+        for j in point_grid.overlapping(query):
+            if j <= i:
+                continue
             pos_j, oid_j, ep_j, r_j = points[j]
             if oid_i == oid_j:
                 continue
 
-            tol = r_i + r_j + 1e-9
+            tol = r_i + r_j + _CONTACT_TOL_M
             dx = pos_i[0] - pos_j[0]
             dy = pos_i[1] - pos_j[1]
             if abs(dx) > tol or abs(dy) > tol:
@@ -899,16 +959,14 @@ def _build_connectivity(ItemList: dict[Any, Any]) -> None:
     for pad_oid, pad_d in pads.items():
         pad_bbox = bboxes[pad_oid]
         pad_ls = layer_sets[pad_oid]
-        for pos, pt_oid, ep, r in points:
+        for k in point_grid.overlapping(pad_bbox):
+            pos, pt_oid, ep, r = points[k]
             if pt_oid == pad_oid:
                 continue
             conn_key = "conn_start" if ep in ("start", "position") else "conn_end"
             if pad_oid in ItemList[pt_oid].get(conn_key, []):
                 continue
             if not pad_ls & layer_sets[pt_oid]:
-                continue
-            pt_bbox = (pos[0] - r, pos[1] - r, pos[0] + r, pos[1] + r)
-            if not _bboxes_overlap(pad_bbox, pt_bbox):
                 continue
             if _point_in_pad(pos, pad_d, margin=r):
                 _add_conn(pt_oid, ep, pad_oid, "position")
@@ -934,16 +992,14 @@ def _build_connectivity(ItemList: dict[Any, Any]) -> None:
             segments = None  # use (sx,sy,ex,ey) directly
 
         # T-junction: points landing on this wire's body
-        for pos, pt_oid, ep, r in points:
+        for k in point_grid.overlapping(wire_bbox):
+            pos, pt_oid, ep, r = points[k]
             if pt_oid == wire_oid:
                 continue
             conn_key = "conn_start" if ep in ("start", "position") else "conn_end"
             if wire_oid in ItemList[pt_oid].get(conn_key, []):
                 continue
             if not wire_ls & layer_sets[pt_oid]:
-                continue
-            pt_bbox = (pos[0] - r, pos[1] - r, pos[0] + r, pos[1] + r)
-            if not _bboxes_overlap(wire_bbox, pt_bbox):
                 continue
             thr = (wr + r) ** 2
             if segments is None:
@@ -963,12 +1019,12 @@ def _build_connectivity(ItemList: dict[Any, Any]) -> None:
                 _add_conn(pt_oid, ep, wire_oid, wire_ep)
 
         # Wire-through-pad: wire body crosses pad without endpoint nearby
-        for pad_oid, pad_d in pads.items():
+        for k in pad_grid.overlapping(wire_bbox):
+            pad_oid = pad_oids[k]
+            pad_d = pads[pad_oid]
             if pad_oid in wire_d["conn_start"] or pad_oid in wire_d["conn_end"]:
                 continue
             if not wire_ls & layer_sets[pad_oid]:
-                continue
-            if not _bboxes_overlap(wire_bbox, bboxes[pad_oid]):
                 continue
             # Check if any point along the wire body lies within the pad shape
             if segments is None:
@@ -1029,11 +1085,9 @@ def _build_connectivity(ItemList: dict[Any, Any]) -> None:
         outline = zone_d["_outline"]
         zone_bbox = bboxes[zone_oid]
         zone_ls = layer_sets[zone_oid]
-        for pos, pt_oid, ep, r in points:
+        for k in point_grid.overlapping(zone_bbox):
+            pos, pt_oid, ep, r = points[k]
             if not zone_ls & layer_sets[pt_oid]:
-                continue
-            pt_bbox = (pos[0] - r, pos[1] - r, pos[0] + r, pos[1] + r)
-            if not _bboxes_overlap(zone_bbox, pt_bbox):
                 continue
             if _point_near_polygon(pos, outline, r):
                 conn_key = "conn_start" if ep in ("start", "position") else "conn_end"
