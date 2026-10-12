@@ -50,7 +50,6 @@ try:
         WIRE,
         ZONE,
         CuLayer,
-        DielectricInfo,
         NetworkElement,
         SpiceElement,
     )
@@ -75,7 +74,6 @@ except ImportError:
         WIRE,
         ZONE,
         CuLayer,
-        DielectricInfo,
         NetworkElement,
         SpiceElement,
     )
@@ -873,80 +871,3 @@ def simulate_network(
     return RunSimulation(
         resistors, conn1, conn2, network_info, frequencies, rload_far, progress
     )
-
-
-if __name__ == "__main__":
-    die_core: DielectricInfo = {"h": 1.51e-3, "epsilon_r": 4.5, "loss_tangent": 0.02}
-    die_pp: DielectricInfo = {"h": 0.2e-3, "epsilon_r": 4.5, "loss_tangent": 0.02}
-    die_core2: DielectricInfo = {"h": 1.0e-3, "epsilon_r": 4.3, "loss_tangent": 0.02}
-
-    # 2-Layer: F.Cu/B.Cu → Microstrip
-    cu_2L: dict[int, CuLayer] = {
-        0: {
-            "thickness": 35e-6,
-            "name": "F.Cu",
-            "abs_height": 0.0,
-            "die_above": None,
-            "die_below": die_core,
-            "model": "Microstrip",
-        },
-        2: {
-            "thickness": 35e-6,
-            "name": "B.Cu",
-            "abs_height": 1.545e-3,
-            "die_above": die_core,
-            "die_below": None,
-            "model": "Microstrip",
-        },
-    }
-    for lid in (0, 2):
-        tr = analyze_trace(0.01, 0.2e-3, lid, cu_2L, 100e6)
-        assert tr["z0"] is not None and tr["r_ac"] > tr["r_dc"]
-
-    # 4-Layer: F.Cu/B.Cu → Microstrip, In1/In2 → Stripline
-    cu_4L: dict[int, CuLayer] = {
-        0: {
-            "thickness": 35e-6,
-            "name": "F.Cu",
-            "abs_height": 0.0,
-            "die_above": None,
-            "die_below": die_pp,
-            "model": "Microstrip",
-        },
-        4: {
-            "thickness": 35e-6,
-            "name": "In1.Cu",
-            "abs_height": 0.235e-3,
-            "die_above": die_pp,
-            "die_below": die_core2,
-            "model": "Stripline",
-        },
-        6: {
-            "thickness": 35e-6,
-            "name": "In2.Cu",
-            "abs_height": 1.270e-3,
-            "die_above": die_core2,
-            "die_below": die_pp,
-            "model": "Stripline",
-        },
-        2: {
-            "thickness": 35e-6,
-            "name": "B.Cu",
-            "abs_height": 1.505e-3,
-            "die_above": die_pp,
-            "die_below": None,
-            "model": "Microstrip",
-        },
-    }
-    for lid in (0, 4, 6, 2):
-        tr = analyze_trace(0.01, 0.2e-3, lid, cu_4L, 100e6)
-        assert tr["z0"] is not None and tr["r_ac"] > tr["r_dc"]
-
-    # No dielectric → DC-only
-    cu_fb: dict[int, CuLayer] = {
-        0: {"thickness": 35e-6, "name": "F.Cu", "abs_height": 0.0}
-    }
-    tr = analyze_trace(0.01, 0.2e-3, 0, cu_fb, 100e6)
-    assert tr["r_ac"] == tr["r_dc"] and tr["z0"] is None
-
-    print("analyze_trace() OK")

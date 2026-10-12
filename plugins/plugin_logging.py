@@ -23,14 +23,30 @@ QUIET_LOGGERS = (
 )
 
 
-def configure_logging() -> None:
-    """Log everything of the plugin to LOG_FILE, replacing the previous run."""
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format="%(asctime)s %(levelname)s [%(filename)s:%(lineno)d]: %(message)s",
-        filename=LOG_FILE,
-        filemode="w",
-        encoding="utf-8",
+def configure_logging(name: str = "") -> None:
+    """Log everything of logger `name` to LOG_FILE, replacing the previous run.
+
+    The IPC plugin owns its process and configures the root logger. Inside
+    KiCad, the pcbnew plugin configures only its package's logger, so neither
+    KiCad nor other plugins write to the file. Called again, as when KiCad
+    reloads its plugins, it replaces only its own handler.
+    """
+    logger = logging.getLogger(name)
+    for own in [
+        h for h in logger.handlers if getattr(h, "baseFilename", None) == LOG_FILE
+    ]:
+        logger.removeHandler(own)
+        own.close()
+    handler = logging.FileHandler(LOG_FILE, mode="w", encoding="utf-8")
+    handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s %(levelname)s [%(filename)s:%(lineno)d]: %(message)s"
+        )
     )
-    for name in QUIET_LOGGERS:
-        logging.getLogger(name).setLevel(logging.WARNING)
+    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = not name
+    for quiet in QUIET_LOGGERS:
+        logging.getLogger(f"{name}.{quiet}" if name else quiet).setLevel(
+            logging.WARNING
+        )

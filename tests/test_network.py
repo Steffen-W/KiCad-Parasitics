@@ -314,3 +314,37 @@ def test_overlapping_zones_conduct(cu_stack: dict[int, Any]) -> None:
     )[0]
 
     assert math.isfinite(distance)
+
+
+def test_analyze_trace_models_every_stackup_layer() -> None:
+    import get_parasitic as gp
+    from board_model import Copper, build_cu_stack, dielectric
+
+    prepreg, core = dielectric(0.2e-3, 4.5), dielectric(1.0e-3, 4.3)
+    copper = [Copper(name, 35e-6) for name in ("F.Cu", "In1.Cu", "In2.Cu", "B.Cu")]
+    stack = build_cu_stack(
+        [copper[0], prepreg, copper[1], core, copper[2], prepreg, copper[3]]
+    )
+    bare = build_cu_stack([Copper("F.Cu", 35e-6)])
+
+    for layer in stack:
+        trace = gp.analyze_trace(0.01, 0.2e-3, layer, stack, 100e6)
+        assert trace["z0"] is not None and trace["r_ac"] > trace["r_dc"]
+    trace = gp.analyze_trace(0.01, 0.2e-3, 0, bare, 100e6)
+    assert trace["r_ac"] == trace["r_dc"] and trace["z0"] is None
+
+
+@pytest.mark.parametrize("axis", ["mirror_x", "mirror_y"])
+def test_coil_mirrored_twice_is_unchanged(axis: str) -> None:
+    import coil_generator as cg
+
+    def points(coil: Any) -> list[float]:
+        return [c for d in coil.result() for k in ("start", "end", "mid") for c in d[k]]
+
+    coil = cg.generate_circular_coil(turns=2, ctx=cg.new_context())
+    before = points(coil)
+    getattr(getattr(coil, axis)(1e-3), axis)(1e-3)
+
+    assert points(coil) == pytest.approx(before)
+    getattr(coil, axis)(1e-3)
+    assert points(coil) != pytest.approx(before)  # a single mirror moves it

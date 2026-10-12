@@ -52,8 +52,8 @@ except ImportError:
 log = logging.getLogger(__name__)
 
 
-class SelectionError(ValueError):
-    """The board selection cannot be analyzed; the message addresses the user."""
+class BoardInputError(ValueError):
+    """The board or its selection cannot be read; the message addresses the user."""
 
 
 def layer_id(name: str) -> int | None:
@@ -417,12 +417,12 @@ def _selected_pair(selection: list[Selected]) -> tuple[Selected, Selected]:
     if len(selection) == 1 and len(selection[0].pads) == 2:
         selection = list(selection[0].pads)
     if len(selection) != 2:
-        raise SelectionError(
+        raise BoardInputError(
             f"Select exactly two elements (selected: {len(selection)})."
         )
     first, second = selection
     if not (first.net and second.net):
-        raise SelectionError(
+        raise BoardInputError(
             "Both selected elements must be copper items with a net "
             "(pads, vias, tracks or zones)."
         )
@@ -446,13 +446,13 @@ def read_board(source: BoardSource) -> Board:
     """The connected copper of the nets that join the two selected items.
 
     Raises:
-        SelectionError: the selection is not two copper items of one net
+        BoardInputError: the selection is not two copper items of one net
             (or of nets joined by Net Ties)
     """
     first, second = _selected_pair(source.selection())
     nets, net_ties = _joined_nets(first.net, source.net_ties())
     if second.net not in nets:
-        raise SelectionError(
+        raise BoardInputError(
             "Selected elements must belong to the same net or be connected by "
             f"a Net Tie (found: {first.net}, {second.net})."
         )
@@ -465,7 +465,7 @@ def read_board(source: BoardSource) -> Board:
         element["is_selected"] = element["id"] in (first.id, second.id)
         elements[element["id"]] = element
     if sum(e["is_selected"] for e in elements.values()) != 2:
-        raise SelectionError(
+        raise BoardInputError(
             "Both selected elements must be pads, vias, tracks or zones "
             "on an enabled copper layer."
         )

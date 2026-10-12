@@ -1,13 +1,13 @@
 import os
 
 import pcbnew
+import wx
 
-from .parasitic import run_plugin
 from .plugin_logging import configure_logging
 from .read_board_pcbnew import PcbnewBoard
+from .result_window import run_plugin
 
-if os.environ.get("PARASITIC_DEBUG"):
-    configure_logging()
+configure_logging(__name__.rpartition(".")[0])  # the plugin package
 
 
 class KiCadPluginParasitic(pcbnew.ActionPlugin):
@@ -21,7 +21,9 @@ class KiCadPluginParasitic(pcbnew.ActionPlugin):
         self.dark_icon_file_name = os.path.join(self.plugin_path, "icon_small.png")
 
     def Run(self) -> None:
-        run_plugin(PcbnewBoard(pcbnew.GetBoard()))
+        run_plugin(
+            lambda: PcbnewBoard(pcbnew.GetBoard()), wx.FindWindowByName("PcbFrame")
+        )
 
 
 KiCadPluginParasitic().register()

@@ -98,27 +98,3 @@ def get_graph_from_edges(
         graph.setdefault(n1, {})[n2] = weight
         graph.setdefault(n2, {})[n1] = weight
     return graph
-
-
-if __name__ == "__main__":
-    start_node = 1
-    end_node = 5
-
-    edges = [
-        (1, 2, 1),  # (node1, node2, distance)
-        (1, 3, 4),
-        (2, 4, 2),
-        (3, 4, 6),
-        (3, 5, 3),
-        (6, 4, 1),
-        (5, 3, 2),
-    ]
-
-    graph: dict[int, dict[int, float]] = get_graph_from_edges(edges)
-    try:
-        distance, path = find_shortest_path(graph, start_node, end_node)
-        print(
-            f"Shortest path {distance!s} from {start_node!s} to {end_node!s}: {path!s}"
-        )
-    except ValueError as e:
-        print(f"Error: {e}")

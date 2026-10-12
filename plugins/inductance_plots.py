@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
+import matplotlib
+import matplotlib.tri as mtri
 import numpy as np
 import trimesh
-
-if TYPE_CHECKING:
-    import wx
+import wx
+from matplotlib.backends.backend_wx import NavigationToolbar2Wx
+from matplotlib.backends.backend_wxagg import FigureCanvasWxAgg
+from matplotlib.cm import ScalarMappable
+from matplotlib.colors import LogNorm, Normalize
+from matplotlib.figure import Figure
 
 try:
     from .pcb_types import VIA, WIRE
@@ -16,55 +21,31 @@ except ImportError:
     from pcb_types import VIA, WIRE
 
 
-def _make_plot_frame_class() -> type:
-    """Create PlotFrame class using wx (imported lazily)."""
-    import wx
-    from matplotlib.backends.backend_wx import NavigationToolbar2Wx as NavToolbar
-    from matplotlib.backends.backend_wxagg import FigureCanvasWxAgg as FigureCanvas
+class PlotFrame(wx.Frame):
+    """wx.Frame around a matplotlib Figure; stays above its parent."""
 
-    class PlotFrame(wx.Frame):
-        """wx.Frame wrapper around a matplotlib Figure."""
-
-        def __init__(
-            self, parent: wx.Window | None, fig: Any, title: str = "Plot"
-        ) -> None:
-            size = fig.get_size_inches() * fig.get_dpi()
-            super().__init__(
-                parent,
-                title=title,
-                size=wx.Size(int(size[0]), int(size[1]) + 80),
-            )
-            panel = wx.Panel(self)
-            sizer = wx.BoxSizer(wx.VERTICAL)
-            self.canvas = FigureCanvas(panel, wx.ID_ANY, fig)
-            self.toolbar = NavToolbar(self.canvas)
-            self.toolbar.Realize()
-            sizer.Add(self.toolbar, 0, wx.EXPAND)
-            sizer.Add(self.canvas, 1, wx.EXPAND)
-            panel.SetSizer(sizer)
-            self.Bind(wx.EVT_CLOSE, lambda evt: self.Destroy())
-
-    return PlotFrame
-
-
-def _show_figure(fig: Any, title: str, parent: wx.Window | None) -> None:
-    """Display a Figure in a PlotFrame via wx.CallAfter (UI-thread safe)."""
-    import wx
-
-    PlotFrame = _make_plot_frame_class()
-
-    def _create() -> None:
-        frame = PlotFrame(parent, fig, title)
-        frame.Show()
-        frame.Raise()
-
-    wx.CallAfter(_create)
+    def __init__(self, parent: wx.Window, fig: Figure, title: str) -> None:
+        size = fig.get_size_inches() * fig.get_dpi()
+        super().__init__(
+            parent,
+            title=title,
+            size=wx.Size(int(size[0]), int(size[1]) + 80),
+            style=wx.DEFAULT_FRAME_STYLE | wx.FRAME_FLOAT_ON_PARENT,
+        )
+        panel = wx.Panel(self)
+        canvas = FigureCanvasWxAgg(panel, wx.ID_ANY, fig)
+        toolbar = NavigationToolbar2Wx(canvas)
+        toolbar.Realize()
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.Add(toolbar, 0, wx.EXPAND)
+        sizer.Add(canvas, 1, wx.EXPAND)
+        panel.SetSizer(sizer)
 
 
 def show_debug_plots(
     debug_data: dict[str, Any],
     segments: list[dict[str, Any]],
-    parent: wx.Window | None = None,
+    parent: wx.Window,
 ) -> None:
     """Show interactive debug plots for centerline and mesh.
 
@@ -72,14 +53,8 @@ def show_debug_plots(
     ----------
     debug_data : dict with centerline, mesh_vertices, mesh_faces
     segments : list[dict] – segment descriptors
-    parent : wx.Window or None – parent for plot frames (None for standalone)
+    parent : wx.Window – the plot frames stay above it and close with it
     """
-    import matplotlib
-    import matplotlib.tri as mtri
-    from matplotlib.cm import ScalarMappable
-    from matplotlib.colors import LogNorm, Normalize
-    from matplotlib.figure import Figure
-
     layer_colors = {
         "F.Cu": "red",
         "B.Cu": "blue",
@@ -137,7 +112,7 @@ def show_debug_plots(
     ax1.set_title(f"Centerline – {len(cl)} pts")
     ax1.set_xlabel("mm")
     ax1.set_ylabel("mm")
-    _show_figure(fig1, f"Centerline – {len(cl)} pts", parent)
+    PlotFrame(parent, fig1, f"Centerline – {len(cl)} pts").Show()
 
     psi = debug_data.get("psi")
     M = debug_data.get("M")
@@ -198,7 +173,7 @@ def show_debug_plots(
         ax3b.grid(True, alpha=0.3)
 
         title3 = f"Inductance along trace (L = {L_total_nH:.2f} nH)"
-        _show_figure(fig3, title3, parent)
+        PlotFrame(parent, fig3, title3).Show()
 
     # --- Figure 4: |B|-field + current distribution (psi) ---
     if psi is not None:
@@ -267,4 +242,4 @@ def show_debug_plots(
         ax4.set_title(f"|B| at z = {z_offset * 1e3:.2f} mm + current distribution")
         ax4.set_xlabel("mm")
         ax4.set_ylabel("mm")
-        _show_figure(fig4, "|B| field + current distribution", parent)
+        PlotFrame(parent, fig4, "|B| field + current distribution").Show()

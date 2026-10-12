@@ -14,10 +14,10 @@ import pytest
 from kipy.proto.board.board_types_pb2 import BoardLayer
 
 from board_model import (
+    BoardInputError,
     Copper,
     NetTie,
     Selected,
-    SelectionError,
     build_cu_stack,
     dielectric,
     net_tie,
@@ -63,7 +63,7 @@ class FakeBoard:
     ],
 )
 def test_invalid_selection(selection: list[Selected], message: str) -> None:
-    with pytest.raises(SelectionError, match=message):
+    with pytest.raises(BoardInputError, match=message):
         read_board(FakeBoard(selection))
 
 

@@ -12,7 +12,7 @@ Plugin to analyze the wires in the PCB editor. To use the plugin, two points mus
 
 The minimum supported Python version is 3.9, the interpreter bundled with KiCad on macOS. Modules that use `X | Y` annotations therefore start with `from __future__ import annotations`, and runtime-evaluated type aliases use `typing.Union`.
 
-Before every nightly release, CI runs ruff (including rule FA102), mypy, vermin, a dry-run install of `plugins/requirements.txt` for Python 3.9 on macOS, and the tests under Python 3.9 and 3.12. The tests need libngspice (e.g. `apt install libngspice0`) and only part of the plugin dependencies:
+Before every nightly release, CI runs ruff (including rule FA102), mypy, vermin, a dry-run install of `plugins/requirements.txt` for Python 3.9 on macOS, and the tests under Python 3.9 and 3.12. The tests need libngspice (e.g. `apt install libngspice0`) and only part of the plugin dependencies. Without bfieldtools the inductance tests are skipped, without wxPython and a display the result window tests (on Linux run `xvfb-run pytest`):
 
 ```bash
 pip install pytest numpy scipy kicad-python -c plugins/requirements.txt
@@ -30,6 +30,10 @@ Both plugins read the board the same way; only the API access differs. An adapte
 3. **Copper**: tracks, arcs, vias, pads, copper zones (no rule areas or teardrops) and the copper of the involved Net Ties (segments and arcs as tracks, polygons as zones). Pads and zones are described by their outline.
 4. **Connectivity** (`connectivity.py`): elements touch on a shared layer when wire ends or via/pad centres overlap, such a point lies on a wire or within a pad or zone outline, a wire crosses an outline, or two outlines overlap. KiCad's own connectivity is not used, since the IPC API does not provide it.
 5. **Stackup**: copper and dielectric layers from top to bottom, from the IPC API or, for pcbnew, whose Python API lacks the stackup, from the saved board file. Without a usable stackup, a two-layer FR4 board is assumed.
+
+### Result window
+
+Both plugins show their results in the same non-modal window (`result_window.py`), so KiCad stays usable while it is open. The analysis and the inductance calculation run in a background thread; the window shows their progress and can cancel the analysis. The thread never calls wx: the window polls its progress with a timer and receives its outcome via `wx.CallAfter`. Clicking the plugin button again re-reads the selection and analyzes it in the same window. KiCad starts a new process for every click on the IPC plugin's button; while a window is open for the same KiCad, that process hands the request to it over a local socket (in the user's runtime directory, or a named pipe on Windows) and exits. A reopened window stays above all others for a moment so it does not end up behind KiCad, then stacks normally. Debug plots stay above the window and close with it.
 
 ## API Support
 
@@ -110,11 +114,11 @@ Model: R-L in series, C parallel to planes
 
 All elements connected to the same zone are treated as low-resistance connections (1 mΩ).
 
-### Calc Inductance
+### Inductance
 
-The **Calc Inductance** button appears next to "Details" when a shortest path exists. It computes the loop inductance of that path using [bfieldtools](https://bfieldtools.github.io/) (BEM on triangulated surface meshes). The trace center-line is buffered to its width, triangulated, and assigned z-coordinates per layer from the stackup. Multi-layer paths with vias are supported.
+The **Inductance** tab of the result window computes the loop inductance of the shortest path with [bfieldtools](https://bfieldtools.github.io/) (BEM on a triangulated surface mesh). The path's center line, closed into a loop, becomes a strip of the trace width at the height of each layer from the stackup; vias join the layers. **Debug plots** show the center line, the inductance along the path and the magnetic field with the current distribution.
 
-Requires additional packages: `bfieldtools`, `shapely`, `triangle`, `trimesh`, `scipy<1.14`.
+Requires `bfieldtools`, `trimesh` and `scipy`, which `plugins/requirements.txt` installs with their version limits.
 <img width="1017" height="665" alt="grafik" src="https://github.com/user-attachments/assets/bbfc86a4-480f-494b-8597-f3ede231d3c2" />
 
 ## Limitations
@@ -124,7 +128,7 @@ Requires additional packages: `bfieldtools`, `shapely`, `triangle`, `trimesh`, `
 - **Path length**: The reported distance is the sum of trace lengths along the path, not straight-line distance.
 - **Stacked traces**: Multiple traces on different layers connected by vias at both ends may be treated as parallel paths.
 - **Coupled lines**: Mutual inductance/capacitance between adjacent traces is not considered. This also means **PCB inductors** (spirals, meanders) cannot be calculated or detected. *(Contributions welcome!)*
-- **Inductance – shortest path only**: Calc Inductance uses only the shortest path between the two selected points. Parallel paths or alternative routes are ignored.
+- **Inductance – shortest path only**: The inductance uses only the shortest path between the two selected points. Parallel paths or alternative routes are ignored.
 - **Inductance – no plane influence**: Metal planes (ground, power) near the trace reduce the effective loop inductance. This effect is currently not modelled.
 - **Inductance – arcs**: Arc tracks are treated as straight lines (chord) for the inductance mesh.
 - **Connectivity from geometry**: Connections are determined from shapes and positions, not from KiCad's connectivity data (see [Board input](#board-input)). Zones count by their outline, not their fill, so copper inside a zone outline is connected to the zone even where the fill is cut away.

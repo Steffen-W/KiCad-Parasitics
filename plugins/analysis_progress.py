@@ -25,10 +25,10 @@ def no_progress(_stage: Stage, _finished: int, _total: int) -> bool:
 
 
 class CancelledError(Exception):
-    """Raised when Progress asks to stop; the message addresses the user."""
+    """Raised when Progress asks to stop."""
 
 
 def report(progress: Progress, stage: Stage, finished: int, total: int) -> None:
     """Pass the state to `progress` and raise CancelledError if it asks to stop."""
     if not progress(stage, finished, total):
-        raise CancelledError("Analysis cancelled.")
+        raise CancelledError
