@@ -78,9 +78,11 @@ class PcbnewBoard:
 
     def selection(self) -> list[Selected]:
         board = self._board
+        # Selecting a footprint flags its pads too; the footprint stands for them.
+        pads = [p for p in board.GetPads() if not p.GetParentFootprint().IsSelected()]
         items = [
             *board.GetTracks(),
-            *board.GetPads(),
+            *pads,
             *board.Zones(),
             *board.GetFootprints(),
             *board.GetDrawings(),
