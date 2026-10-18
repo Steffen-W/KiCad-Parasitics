@@ -13,29 +13,31 @@ try:
     from .board_model import (
         NetTie,
         Selected,
-        build_cu_stack,
+        Stackup,
         net_tie,
         pad,
         polygon_area,
+        slot_drill,
         via,
         wire,
         zone,
     )
-    from .pcb_types import BoardElement, CuLayer, Point
+    from .pcb_types import BoardElement, Point
     from .stackup_file import read_stackup_file
 except ImportError:
     from board_model import (
         NetTie,
         Selected,
-        build_cu_stack,
+        Stackup,
         net_tie,
         pad,
         polygon_area,
+        slot_drill,
         via,
         wire,
         zone,
     )
-    from pcb_types import BoardElement, CuLayer, Point
+    from pcb_types import BoardElement, Point
     from stackup_file import read_stackup_file
 
 
@@ -68,10 +70,21 @@ def _selected(item: Any) -> Selected:
     return Selected(_id(item))
 
 
+_SHAPE_KINDS = {
+    pcbnew.SHAPE_T_SEGMENT: "line",
+    pcbnew.SHAPE_T_ARC: "arc",
+    pcbnew.SHAPE_T_RECTANGLE: "rectangle",
+    pcbnew.SHAPE_T_CIRCLE: "circle",
+    pcbnew.SHAPE_T_POLY: "polygon",
+    pcbnew.SHAPE_T_BEZIER: "bezier",
+}
+
+
 class PcbnewBoard:
     def __init__(self, board: pcbnew.BOARD) -> None:
         self._board = board
         self._enabled = set(board.GetEnabledLayers().CuStack())
+        self._unmodelled: list[str] = []
 
     def _layers(self, item: Any) -> list[int]:
         return sorted(set(item.GetLayerSet().CuStack()) & self._enabled)
@@ -106,6 +119,13 @@ class PcbnewBoard:
         self, nets: AbstractSet[str], net_ties: Sequence[NetTie]
     ) -> Iterator[BoardElement]:
         board = self._board
+        self._unmodelled = [
+            _SHAPE_KINDS.get(shape.GetShape(), "shape")
+            for shape in board.GetDrawings()
+            if isinstance(shape, pcbnew.PCB_SHAPE)
+            and shape.GetNetname() in nets
+            and self._layers(shape)
+        ]
         for track in board.GetTracks():
             if track.GetNetname() in nets:
                 yield self._track(track)
@@ -143,7 +163,7 @@ class PcbnewBoard:
         layers = self._layers(p)
         outline = _outline(p.GetEffectivePolygon(layers[0])) if layers else []
         position = _point(p.GetPosition())
-        drill = _m(p.GetDrillSizeX())
+        drill = slot_drill(_m(p.GetDrillSizeX()), _m(p.GetDrillSizeY()))
         return pad(_id(p), p.GetNetname(), layers, position, drill, outline)
 
     def _shape(self, shape: Any) -> Iterator[BoardElement]:
@@ -162,8 +182,13 @@ class PcbnewBoard:
             mid = _point(shape.GetArcMid()) if kind == pcbnew.SHAPE_T_ARC else None
             start, end = _point(shape.GetStart()), _point(shape.GetEnd())
             yield wire(*args, start, end, _m(shape.GetWidth()), mid)
+        else:
+            self._unmodelled.append(_SHAPE_KINDS.get(kind, "shape"))
 
-    def stackup(self) -> dict[int, CuLayer]:
+    def unmodelled(self) -> list[str]:
+        return self._unmodelled
+
+    def stackup(self) -> Stackup:
         board_file = Path(self._board.GetFileName())
         thickness = _m(self._board.GetDesignSettings().GetBoardThickness())
-        return build_cu_stack(read_stackup_file(board_file), thickness)
+        return Stackup(read_stackup_file(board_file), thickness)

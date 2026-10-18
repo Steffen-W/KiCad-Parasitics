@@ -15,7 +15,7 @@ from typing import Any, Callable
 
 import pytest
 
-from board_model import Selected, build_cu_stack, via, wire
+from board_model import Selected, Stackup, via, wire
 
 wx = pytest.importorskip("wx")
 
@@ -45,8 +45,11 @@ class _Source:
             via("v2", "N", [0, 2], (5e-3, 0.0), 0.6e-3, 0.3e-3),
         ]
 
-    def stackup(self) -> dict[int, Any]:
-        return build_cu_stack([])
+    def unmodelled(self) -> list[str]:
+        return []
+
+    def stackup(self) -> Stackup:
+        return Stackup([])
 
 
 @pytest.fixture(scope="module")

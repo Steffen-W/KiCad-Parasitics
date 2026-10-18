@@ -11,7 +11,10 @@ from kipy.board import Board
 from kipy.board_types import (
     ArcTrack,
     BoardArc,
+    BoardBezier,
+    BoardCircle,
     BoardPolygon,
+    BoardRectangle,
     BoardSegment,
     FootprintInstance,
     Pad,
@@ -28,37 +31,39 @@ try:
         Copper,
         NetTie,
         Selected,
+        Stackup,
         StackupEntry,
         arc_midline,
-        build_cu_stack,
         dielectric,
         layer_id,
         net_tie,
         pad,
         polygon_area,
+        slot_drill,
         via,
         wire,
         zone,
     )
-    from .pcb_types import BoardElement, CuLayer, Point
+    from .pcb_types import BoardElement, Point
 except ImportError:
     from board_model import (
         Copper,
         NetTie,
         Selected,
+        Stackup,
         StackupEntry,
         arc_midline,
-        build_cu_stack,
         dielectric,
         layer_id,
         net_tie,
         pad,
         polygon_area,
+        slot_drill,
         via,
         wire,
         zone,
     )
-    from pcb_types import BoardElement, CuLayer, Point
+    from pcb_types import BoardElement, Point
 
 log = logging.getLogger(__name__)
 
@@ -99,10 +104,21 @@ def _selected(item: Any) -> Selected:
     return Selected(str(item.id.value))
 
 
+_SHAPE_KINDS = {
+    BoardSegment: "line",
+    BoardArc: "arc",
+    BoardRectangle: "rectangle",
+    BoardCircle: "circle",
+    BoardPolygon: "polygon",
+    BoardBezier: "bezier",
+}
+
+
 class IpcBoard:
     def __init__(self, board: Board) -> None:
         self._board = board
         self._enabled = set(board.get_enabled_layers())
+        self._unmodelled: list[str] = []
 
     def _copper(self, layers: Iterable[Any]) -> list[Any]:
         """The enabled copper layers among kipy's BoardLayer values."""
@@ -129,6 +145,11 @@ class IpcBoard:
         self, nets: AbstractSet[str], net_ties: Sequence[NetTie]
     ) -> Iterator[BoardElement]:
         board = self._board
+        self._unmodelled = [
+            _SHAPE_KINDS.get(type(shape), "shape")
+            for shape in board.get_shapes()
+            if shape.net.name in nets and self._layers([shape.layer])
+        ]
         for track in board.get_tracks():
             if track.net.name in nets:
                 mid = _point(track.mid) if isinstance(track, ArcTrack) else None
@@ -187,6 +208,11 @@ class IpcBoard:
             mid = _point(shape.mid) if isinstance(shape, BoardArc) else None
             start, end = _point(shape.start), _point(shape.end)
             yield wire(*args, start, end, _m(shape.attributes.stroke.width), mid)
+        else:
+            self._unmodelled.append(_SHAPE_KINDS.get(type(shape), "shape"))
+
+    def unmodelled(self) -> list[str]:
+        return self._unmodelled
 
     def _pad(self, p: Any) -> BoardElement:
         copper = self._copper(p.padstack.layers)
@@ -201,13 +227,14 @@ class IpcBoard:
             else:
                 if shape is not None:
                     outline = _polyline(shape.outline)
-        drill = _m(p.padstack.drill.diameter.x) if p.padstack.drill else 0.0
+        hole = p.padstack.drill
+        drill = slot_drill(_m(hole.diameter.x), _m(hole.diameter.y)) if hole else 0.0
         position = _point(p.position)
         return pad(
             str(p.id.value), p.net.name, self._layers(copper), position, drill, outline
         )
 
-    def stackup(self) -> dict[int, CuLayer]:
+    def stackup(self) -> Stackup:
         entries: list[StackupEntry] = []
         for layer in self._board.get_stackup().layers:
             if layer.type == BoardStackupLayerType.BSLT_COPPER:
@@ -224,4 +251,4 @@ class IpcBoard:
                     entries.append(dielectric(h, sub[0].epsilon_r, sub[0].loss_tangent))
                 elif layer.thickness > 0:
                     entries.append(dielectric(_m(layer.thickness)))
-        return build_cu_stack(entries)
+        return Stackup(entries)

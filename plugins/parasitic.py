@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import textwrap
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Sequence
 from itertools import combinations
@@ -43,9 +44,9 @@ except ImportError:
     )
     from spice_worker import SpiceUnavailableError
 try:
-    from .pcb_types import WIRE, ZONE, CuLayer, Point
+    from .pcb_types import WIRE, ZONE, CuLayer, NetworkElement, Point
 except ImportError:
-    from pcb_types import WIRE, ZONE, CuLayer, Point
+    from pcb_types import WIRE, ZONE, CuLayer, NetworkElement, Point
 
 log = logging.getLogger(__name__)
 
@@ -148,6 +149,18 @@ def _point_text(
     return f"({x * 1e3:.3f}, {y * 1e3:.3f}) mm on {names}"
 
 
+def _path_notes(path: list[int], network_info: list[NetworkElement]) -> list[str]:
+    """Simplifications that shape the result along `path`."""
+    on_path = set(path)
+    if not any(e["type"] == ZONE and set(e["nodes"]) <= on_path for e in network_info):
+        return []
+    link = format_si(ZONE_LINK_OHM, "Ω")
+    return [
+        f"Zones on the path count as nearly ideal conductors: {link} per "
+        "connection, and crossing them adds no length."
+    ]
+
+
 def _islands_error(
     ends: list[MeasurementPoint],
     graph: dict[int, dict[int, float]],
@@ -198,7 +211,8 @@ def analyze_pcb_parasitic(
         dict with: resistance_dc, impedance_ac, distance, short_path_resistance,
                    area, network_info, graph, path, conn1, conn2,
                    measured (texts naming the two measured points),
-                   free_ends (number of free ends of the selection), error,
+                   free_ends (number of free ends of the selection),
+                   notes (simplifications of the analysis, see Board.notes), error,
                    spice_unavailable (message when ngspice cannot be started),
                    skipped (elements left out of the network, see extract_network)
     Raises:
@@ -217,6 +231,7 @@ def analyze_pcb_parasitic(
         "conn2": None,
         "measured": [],
         "free_ends": 0,
+        "notes": [],
         "error": None,
         "spice_unavailable": None,
         "skipped": [],
@@ -261,6 +276,7 @@ def analyze_pcb_parasitic(
             "network_info": network["network_info"],
             "graph": network["graph"],
             "path": path,
+            "notes": _path_notes(path, network["network_info"]),
         }
     )
 
@@ -296,10 +312,13 @@ def format_result_message(
     CuStack: dict[int, CuLayer],
     net_ties: Sequence[str] = (),
     nets: Sequence[str] = (),
+    notes: Sequence[str] = (),
 ) -> str:
     """Format analysis result as human-readable message.
 
-    net_ties lists the Net Ties joining `nets`, the nets that were analyzed.
+    net_ties lists the Net Ties joining `nets`, the nets that were analyzed;
+    notes are simplifications made while reading the board (see Board.notes),
+    listed with those of the analysis.
     """
     lines = []
     if result["skipped"]:
@@ -313,6 +332,15 @@ def format_result_message(
 
     if result["error"]:
         return "\n".join([*lines, str(result["error"])])
+
+    notes = [*notes, *result["notes"]]
+    if notes:
+        lines.append("Simplified in this model (expected, not an error):")
+        lines += [
+            textwrap.fill(note, 88, initial_indent="  - ", subsequent_indent="    ")
+            for note in notes
+        ]
+        lines.append("")
 
     if net_ties:
         lines += ["Net tie:", *(f"  {ref}" for ref in net_ties)]
@@ -339,16 +367,6 @@ def format_result_message(
 
     if short_path_RES is not None:
         lines.append(f"Shortest path resistance ≈ {short_path_RES * 1000:.3f} mΩ")
-        on_path = set(result["path"])
-        if any(
-            e["type"] == ZONE and set(e["nodes"]) <= on_path
-            for e in result["network_info"]
-        ):
-            link = format_si(ZONE_LINK_OHM, "Ω")
-            lines.append(
-                f"(zones on the path count as nearly ideal conductors: {link} "
-                "per connection, no length)"
-            )
     else:
         log_file = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "debug_parasitic.log"

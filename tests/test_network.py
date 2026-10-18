@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from board_model import arc_geometry, pad, via, wire, zone
+from board_model import arc_geometry, pad, split_at_body_contacts, via, wire, zone
 from connectivity import _bboxes_overlap, _BBoxGrid, build_connectivity
 from get_distance import find_shortest_path
 
@@ -240,10 +240,6 @@ def test_extract_network_skips_unusable_resistance(
     assert network["skipped"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="a contact on a wire's body is moved to the nearer end",
-)
 def test_branch_off_a_wire_body_splits_its_length(cu_stack: dict[int, Any]) -> None:
     import get_parasitic as gp
     from connect_nets import Connect_Nets
@@ -251,14 +247,15 @@ def test_branch_off_a_wire_body_splits_its_length(cu_stack: dict[int, Any]) -> N
     main = wire("main", "N", [0], (0.0, 0.0), (10e-3, 0.0), 0.2e-3)
     branch = wire("branch", "N", [0], (3e-3, 0.0), (3e-3, 5e-3), 0.2e-3)
     items = {"main": main, "branch": branch}
+    split_at_body_contacts(items)
     build_connectivity(items)
     data = Connect_Nets(items)
     network = gp.extract_network(data, cu_stack)
     tip = data["branch"]["net_end"][0]
 
     distances = [
-        gp.find_path(network, data["main"][end][0], tip)[0]
-        for end in ("net_start", "net_end")
+        gp.find_path(network, data[part][end][0], tip)[0]
+        for part, end in (("main#0", "net_start"), ("main#1", "net_end"))
     ]
 
     assert distances == pytest.approx([8e-3, 12e-3])

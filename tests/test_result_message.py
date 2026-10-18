@@ -28,6 +28,7 @@ def _result(**overrides: Any) -> dict[str, Any]:
         "free_ends": 0,
         "path": [1, 2],
         "network_info": [],
+        "notes": [],
     }
     result.update(overrides)
     return result
@@ -58,15 +59,31 @@ def test_choice_among_free_ends_is_noted(
     assert ("farthest apart of 3 free ends" in text) is noted
 
 
-@pytest.mark.parametrize(("link_type", "noted"), [("ZONE", True), ("WIRE", False)])
-def test_zone_crossing_is_noted(
-    cu_stack: dict[int, Any], link_type: str, noted: bool
+@pytest.mark.parametrize(
+    ("link_type", "path", "noted"),
+    [("ZONE", [1, 2, 3], True), ("ZONE", [1, 3], False), ("WIRE", [1, 2], False)],
+    ids=["path crosses zone", "path passes beside", "no zone"],
+)
+def test_zone_crossing_is_noted(link_type: str, path: list[int], noted: bool) -> None:
+    link: Any = {"type": link_type, "nodes": (1, 2)}
+
+    notes = parasitic._path_notes(path, [link])
+
+    assert bool(notes) is noted
+
+
+def test_notes_of_board_and_analysis_are_listed_together(
+    cu_stack: dict[int, Any],
 ) -> None:
-    link = {"type": link_type, "nodes": (1, 2)}
+    result = _result(notes=["From the analysis."])
 
-    text = format_result_message(_result(network_info=[link]), cu_stack)
+    text = format_result_message(result, cu_stack, notes=["From the board."])
 
-    assert ("zones on the path count as nearly ideal" in text) is noted
+    assert (
+        "Simplified in this model (expected, not an error):\n"
+        "  - From the board.\n"
+        "  - From the analysis.\n"
+    ) in text
 
 
 def test_failed_simulations_are_marked(cu_stack: dict[int, Any]) -> None:

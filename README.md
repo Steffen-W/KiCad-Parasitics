@@ -28,9 +28,10 @@ Both plugins read the board the same way; only the API access differs. An adapte
 1. **Selection**: the selected tracks, arcs, vias and pads; a footprint stands for its pads. Anything else (zones, text, graphics) is no measurement point and left out. A selected item on no enabled copper layer is an error, since it would silently change what is measured.
 2. **Nets**: the net of the first item plus every net that Net Tie footprints join to it, transitively. All other items must belong to one of them. Only the copper of these nets is read from KiCad.
 3. **Copper**: tracks, arcs, vias, pads, copper zones (no rule areas or teardrops) and the copper of the involved Net Ties (segments and arcs as tracks, polygons as zones). Pads and zones are described by their outline.
-4. **Connectivity** (`connectivity.py`): elements touch on a shared layer when wire ends or via/pad centres overlap, such a point lies on a wire or within a pad or zone outline, a wire crosses an outline, or two outlines overlap. KiCad's own connectivity is not used, since the IPC API does not provide it.
+4. **Connectivity** (`connectivity.py`): a trace whose body is touched by a trace end, a via or a pad is first cut there, repeatedly, since a cut makes new trace ends (`board_model.split_at_body_contacts`); parts get the ID `<id>#<n>`. Then elements touch on a shared layer when wire ends or via/pad centres overlap, such a point lies on a wire or within a pad or zone outline, a wire crosses an outline, or two outlines overlap. KiCad's own connectivity is not used, since the IPC API does not provide it.
 5. **Stackup**: copper and dielectric layers from top to bottom, from the IPC API or, for pcbnew, whose Python API lacks the stackup, from the saved board file. Without a usable stackup, a two-layer FR4 board is assumed.
-6. **Measurement points** (`parasitic.selection_ends`, on the nodes of `connect_nets.py`): selected tracks join the nodes at their ends, a pad or via, selected or not, is one point on all its layers. The free ends are the points of the selection touched by at most one selected track. The analysis measures between the two free ends with the longest shortest path between them; for a pad or via the layer with the shortest path is used. If the free ends lie on separate copper islands, no single path stands for the selection: the analysis stops and lists the ends of each island.
+6. **Simplifications**: what the model leaves out or assumes is listed in the result under "Simplified in this model": an assumed stackup, copper shapes of the nets that are not modelled, and zones crossed as nearly ideal conductors. Oval (slot) holes are modelled as round holes with the same wall length, which keeps the barrel resistance.
+7. **Measurement points** (`parasitic.selection_ends`, on the nodes of `connect_nets.py`): selected tracks join the nodes at their ends, a pad or via, selected or not, is one point on all its layers. The free ends are the points of the selection touched by at most one selected track. The analysis measures between the two free ends with the longest shortest path between them; for a pad or via the layer with the shortest path is used. If the free ends lie on separate copper islands, no single path stands for the selection: the analysis stops and lists the ends of each island.
 
 ### Result window
 
@@ -125,7 +126,7 @@ Requires `bfieldtools`, `trimesh` and `scipy`, which `plugins/requirements.txt` 
 ## Limitations
 
 - **Pads**: Treated as ideal connection points with negligible resistance.
-- **Wire connections**: Connections are always made to the **start or end of a trace**, never to a point in the middle.
+- **Wire connections**: A trace touched on its body by a trace end, a via or a pad is cut there into parts. A trace crossing a zone is connected to the zone at its nearer end, and two traces that merely cross are not connected.
 - **Path length**: The reported distance is the sum of trace and via lengths along the path, not straight-line distance; crossing a zone adds no length.
 - **Stacked traces**: Multiple traces on different layers connected by vias at both ends may be treated as parallel paths.
 - **Coupled lines**: Mutual inductance/capacitance between adjacent traces is not considered. This also means **PCB inductors** (spirals, meanders) cannot be calculated or detected. *(Contributions welcome!)*

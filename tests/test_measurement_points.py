@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from analysis_progress import no_progress
-from board_model import pad, via, wire
+from board_model import pad, split_at_body_contacts, via, wire
 from connect_nets import Connect_Nets
 from connectivity import build_connectivity
 from get_parasitic import extract_network
@@ -36,9 +36,10 @@ def _pad(id: str, at: Point) -> BoardElement:
 def _connected(elements: list[BoardElement], selected: str) -> dict[str, Any]:
     """Copies of `elements` as Connect_Nets returns them, `selected` IDs marked."""
     data = {e["id"]: copy.deepcopy(e) for e in elements}
-    build_connectivity(data)
     for e in data.values():
         e["is_selected"] = e["id"] in selected.split()
+    split_at_body_contacts(data)
+    build_connectivity(data)
     return Connect_Nets(data)
 
 
@@ -67,6 +68,7 @@ _TEE = [
     _w("right", (10, 0), (20, 0)),
     _w("stub", (10, 0), (10, 3)),
 ]
+_BODY_TEE = [_w("main", (0, 0), (20, 0)), _w("stub", (10, 0), (10, 3))]
 _LOOP = [
     _w("a", (0, 0), (5, 0)),
     _w("b", (5, 0), (5, 5)),
@@ -85,6 +87,7 @@ _ISLANDS = [_w("w1", (0, 0), (5, 0)), _w("w3", (10, 0), (15, 0))]
         (_THROUGH_VIA, "top v bottom", 2, {(0, 0), (10, 0)}),
         (_THROUGH_VIA, "top bottom", 2, {(0, 0), (10, 0)}),
         (_TEE, "left right stub", 3, {(0, 0), (20, 0)}),
+        (_BODY_TEE, "main stub", 3, {(0, 0), (20, 0)}),
         (_LOOP, "a b c d", 0, set()),
         (_PADS, "p1 p2", 2, {(0, 0), (5, 0)}),
         (_PADS, "p1 w p2", 2, {(0, 0), (5, 0)}),
@@ -96,6 +99,7 @@ _ISLANDS = [_w("w1", (0, 0), (5, 0)), _w("w3", (10, 0), (15, 0))]
         "run through via",
         "run, via not selected",
         "tee",
+        "tee on a track body",
         "closed loop",
         "two pads",
         "pads with track",

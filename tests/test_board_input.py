@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Iterable, Sequence
 from collections.abc import Set as AbstractSet
 from pathlib import Path
@@ -21,11 +22,13 @@ from board_model import (
     build_cu_stack,
     dielectric,
     net_tie,
+    Stackup,
     read_board,
+    slot_drill,
     via,
     wire,
 )
-from pcb_types import BoardElement, CuLayer
+from pcb_types import BoardElement
 from read_board_ipc import IpcBoard
 from stackup_file import read_stackup_file
 
@@ -38,10 +41,14 @@ class FakeBoard:
         selection: list[Selected],
         ties: Sequence[NetTie] = (),
         extra: Sequence[BoardElement] = (),
+        stackup: Stackup = Stackup([]),
+        unmodelled: Sequence[str] = (),
     ) -> None:
         self._selection = selection
         self._ties = list(ties)
         self._extra = list(extra)
+        self._stackup = stackup
+        self._unmodelled = list(unmodelled)
         self.nets: AbstractSet[str] = set()
 
     def selection(self) -> list[Selected]:
@@ -57,8 +64,11 @@ class FakeBoard:
         vias = [via(f"v{net}", net, [0], (0.0, 0.0), 1e-3, 5e-4) for net in "ABCD"]
         return [*vias, *self._extra]
 
-    def stackup(self) -> dict[int, CuLayer]:
-        return build_cu_stack([])
+    def unmodelled(self) -> list[str]:
+        return self._unmodelled
+
+    def stackup(self) -> Stackup:
+        return self._stackup
 
 
 @pytest.mark.parametrize(
@@ -143,7 +153,7 @@ def test_ipc_stackup_skips_unknown_copper_layer(
     ]
 
     with caplog.at_level(logging.WARNING):
-        stack = IpcBoard(board).stackup()
+        stack = build_cu_stack(IpcBoard(board).stackup().entries)
 
     assert sorted(stack) == [0, 2]
     assert stack[2]["abs_height"] == pytest.approx(0.035e-3 * 2 + 1.5e-3 * 2)
@@ -200,8 +210,38 @@ def test_file_stackup_falls_back_to_two_layers(
     board_file = tmp_path / "board.kicad_pcb"
     if content is not None:
         board_file.write_text(content, encoding="utf-8")
+    stackup = Stackup(read_stackup_file(board_file), board_thickness=1e-3)
 
-    stack = build_cu_stack(read_stackup_file(board_file), board_thickness=1e-3)
+    board = read_board(FakeBoard([Selected("vA", "A")], stackup=stackup))
 
+    stack = board.cu_stack
     assert {k: v["name"] for k, v in stack.items()} == {0: "F.Cu", 2: "B.Cu"}
     assert stack[2]["abs_height"] + stack[2]["thickness"] == pytest.approx(1e-3)
+    assert board.notes == [
+        "No usable stackup was found, so a two-layer FR4 board of 1 mm with 35 µm "
+        "copper is assumed. Define the stackup in Board Setup (for the pcbnew "
+        "plugin, then save the board)."
+    ]
+
+
+def test_unmodelled_copper_is_noted() -> None:
+    usable = Stackup([Copper("F.Cu", 35e-6)])
+    source = FakeBoard(
+        [Selected("vA", "A")],
+        stackup=usable,
+        unmodelled=["polygon", "circle", "polygon"],
+    )
+
+    assert read_board(source).notes == [
+        "3 copper shape(s) of these nets (circle, polygon ×2) are not part of the "
+        "model, so current through them is not counted."
+    ]
+
+
+@pytest.mark.parametrize(
+    ("x", "y", "diameter"), [(1.0, 1.0, 1.0), (1.0, 3.0, 1.0 + 4.0 / math.pi)]
+)
+def test_slot_drill_keeps_the_hole_wall_length(
+    x: float, y: float, diameter: float
+) -> None:
+    assert slot_drill(x, y) == slot_drill(y, x) == pytest.approx(diameter)

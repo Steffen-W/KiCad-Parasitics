@@ -16,7 +16,7 @@ BBox = tuple[float, float, float, float]
 End = Literal["conn_start", "conn_end"]
 
 # Extra distance at which two contact points still count as touching.
-_CONTACT_TOL_M = 1e-9
+CONTACT_TOL_M = 1e-9
 
 
 def _bboxes_overlap(a: BBox, b: BBox) -> bool:
@@ -74,13 +74,18 @@ class _BBoxGrid:
         return sorted(i for i in found if _bboxes_overlap(self._boxes[i], box))
 
 
-def _dist_sq_to_segment(p: Point, a: Point, b: Point) -> float:
+def _nearest_on_segment(p: Point, a: Point, b: Point) -> Point:
     dx, dy = b[0] - a[0], b[1] - a[1]
     len_sq = dx * dx + dy * dy
     t = 0.0
     if len_sq > 0:
         t = max(0.0, min(1.0, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len_sq))
-    ex, ey = p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy)
+    return (a[0] + t * dx, a[1] + t * dy)
+
+
+def _dist_sq_to_segment(p: Point, a: Point, b: Point) -> float:
+    q = _nearest_on_segment(p, a, b)
+    ex, ey = p[0] - q[0], p[1] - q[1]
     return ex * ex + ey * ey
 
 
@@ -114,6 +119,13 @@ def _inside(p: Point, polygon: Sequence[Point]) -> bool:
         if (y1 > y) != (y2 > y) and x < x1 + (y - y1) * (x2 - x1) / (y2 - y1):
             inside = not inside
     return inside
+
+
+def _nearest_on_polyline(p: Point, line: Sequence[Point]) -> Point:
+    return min(
+        (_nearest_on_segment(p, a, b) for a, b in _segments(line)),
+        key=lambda q: math.dist(p, q),
+    )
 
 
 def _near_polyline(p: Point, line: Sequence[Point], margin: float) -> bool:
@@ -194,7 +206,8 @@ def build_connectivity(elements: dict[str, BoardElement]) -> None:
     - a wire's body overlaps a pad or zone outline, or
     - two pad or zone outlines overlap.
     Contact with a wire's body is recorded at the wire end nearer to the
-    contact point or the outline's centre.
+    contact point or the outline's centre; board_model.split_at_body_contacts
+    cuts wires beforehand, so this remains for wires crossing a zone.
     """
     layers = {i: set(e["layer"]) for i, e in elements.items()}
     contacts = [c for e in elements.values() for c in _contacts(e)]
@@ -223,10 +236,10 @@ def build_connectivity(elements: dict[str, BoardElement]) -> None:
 
     for i, c in enumerate(contacts):
         # Twice the tolerance, so rounding cannot drop a candidate.
-        query = _bbox([c.position], c.radius + 2 * _CONTACT_TOL_M)
+        query = _bbox([c.position], c.radius + 2 * CONTACT_TOL_M)
         for j in contact_grid.overlapping(query):
             d = contacts[j]
-            reach = c.radius + d.radius + _CONTACT_TOL_M
+            reach = c.radius + d.radius + CONTACT_TOL_M
             if (
                 j > i
                 and unlinked(c.id, c.end, d.id)
@@ -270,3 +283,55 @@ def build_connectivity(elements: dict[str, BoardElement]) -> None:
                 box = _bbox(a["outline"])
                 centre = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
                 link(w["id"], _nearer_end(w, centre), a["id"], "conn_start")
+
+
+def body_contacts(
+    elements: dict[str, BoardElement],
+) -> list[tuple[WireElement, list[Point]]]:
+    """The wires touched on their body away from both ends, with the points on
+    their midline where that happens.
+
+    A pad whose outline overlaps the body touches at its centre's projection,
+    any other contact point (see _Contact) where it lies within reach of the
+    midline. A pad that covers an end of the wire, or a contact point that
+    reaches one, makes an end contact and is not listed, nor is a point within
+    CONTACT_TOL_M of an end.
+    """
+    layers = {i: set(e["layer"]) for i, e in elements.items()}
+    pads = [e for e in elements.values() if e["type"] == PAD and len(e["outline"]) >= 3]
+    pad_ids = {p["id"] for p in pads}
+    contacts = [
+        c for e in elements.values() if e["id"] not in pad_ids for c in _contacts(e)
+    ]
+    contact_grid = _BBoxGrid([_bbox([c.position], c.radius) for c in contacts])
+    pad_grid = _BBoxGrid([_bbox(p["outline"]) for p in pads])
+    touched = []
+    for w in (e for e in elements.values() if e["type"] == WIRE):
+        r = w["width"] / 2
+        line = w["midline_pts"]
+        ends = (w["start"], w["end"])
+        points = []
+        for k in contact_grid.overlapping(_bbox(line, r)):
+            c = contacts[k]
+            if c.id == w["id"] or not layers[c.id] & layers[w["id"]]:
+                continue
+            reach = r + c.radius + CONTACT_TOL_M
+            q = _nearest_on_polyline(c.position, line)
+            if math.dist(c.position, q) <= reach and all(
+                math.dist(c.position, end) > reach for end in ends
+            ):
+                points.append(q)
+        for k in pad_grid.overlapping(_bbox(line, r)):
+            p = pads[k]
+            if (
+                layers[p["id"]] & layers[w["id"]]
+                and _line_touches_area(line, p["outline"], r)
+                and not any(_point_touches_area(end, p["outline"], r) for end in ends)
+            ):
+                points.append(_nearest_on_polyline(p["position"], line))
+        points = [
+            q for q in points if min(math.dist(q, e) for e in ends) > CONTACT_TOL_M
+        ]
+        if points:
+            touched.append((w, points))
+    return touched

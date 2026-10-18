@@ -348,7 +348,11 @@ class ResultFrame(wx.Frame):
         self._result = result
         self._summary.SetValue(
             format_result_message(
-                result, board.cu_stack, net_ties=board.net_ties, nets=board.nets
+                result,
+                board.cu_stack,
+                net_ties=board.net_ties,
+                nets=board.nets,
+                notes=board.notes,
             )
         )
         if result["network_info"]:
