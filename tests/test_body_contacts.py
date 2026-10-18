@@ -112,9 +112,10 @@ def test_contacts_at_one_point_make_one_cut() -> None:
     assert all(elements[f"main#{n}"]["is_selected"] for n in range(3))
 
 
-def test_path_and_inductance_geometry_follow_the_cut(cu_stack: dict[int, Any]) -> None:
+def _branch_path(cu_stack: dict[int, Any]) -> tuple[float, list[int], Any]:
+    """Distance, path and network from the start of the cut track to the tip
+    of a branch off its body at 3 mm."""
     import get_parasitic as gp
-    from calc_inductance import _extract_segments
     from connect_nets import Connect_Nets
     from connectivity import build_connectivity
 
@@ -123,13 +124,25 @@ def test_path_and_inductance_geometry_follow_the_cut(cu_stack: dict[int, Any]) -
     build_connectivity(elements)
     data = Connect_Nets(elements)
     network = gp.extract_network(data, cu_stack)
-
     distance, path, _ = gp.find_path(
         network, data["main#0"]["net_start"][0], data["branch"]["net_end"][0]
     )
-    segments = _extract_segments(path, network["network_info"], cu_stack)
+    return distance, path, network
+
+
+def test_path_follows_the_cut(cu_stack: dict[int, Any]) -> None:
+    distance, _path, _network = _branch_path(cu_stack)
 
     assert distance == pytest.approx(8 * MM)
+
+
+def test_inductance_geometry_follows_the_cut(cu_stack: dict[int, Any]) -> None:
+    pytest.importorskip("trimesh")  # imported by calc_inductance, not in CI
+    from calc_inductance import _extract_segments
+
+    _distance, path, network = _branch_path(cu_stack)
+    segments = _extract_segments(path, network["network_info"], cu_stack)
+
     assert sum(s["length"] for s in segments) == pytest.approx(8 * MM)
 
 
