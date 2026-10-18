@@ -3,7 +3,29 @@ from __future__ import annotations
 import heapq
 import math
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Hashable, Sequence
+from typing import Generic, TypeVar
+
+T = TypeVar("T", bound=Hashable)
+
+
+class DisjointSets(Generic[T]):
+    """Union-find over items joined pairwise; a new item is a group of its own."""
+
+    def __init__(self) -> None:
+        self._parent: dict[T, T] = {}
+
+    def find(self, item: T) -> T:
+        """The representative of the group of `item`."""
+        parent = self._parent
+        parent.setdefault(item, item)
+        while parent[item] != item:
+            parent[item] = parent[parent[item]]
+            item = parent[item]
+        return item
+
+    def union(self, a: T, b: T) -> None:
+        self._parent[self.find(a)] = self.find(b)
 
 
 def dijkstra(

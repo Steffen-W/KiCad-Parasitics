@@ -281,23 +281,18 @@ def _zone_network(
     return data, gp.extract_network(data, cu_stack)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="a zone links its N connections pairwise, not to a star point",
-)
-def test_zone_needs_one_resistor_per_connection(cu_stack: dict[int, Any]) -> None:
+def test_zone_links_each_connection_to_one_star(cu_stack: dict[int, Any]) -> None:
     centres = [(x, y) for x in (2, 5, 8) for y in (3, 7)]
     zones = [zone("z", "N", [0], _square(5, 5, 5), 1e-4)]
 
-    _data, network = _zone_network(zones, centres, cu_stack)
+    data, network = _zone_network(zones, centres, cu_stack)
 
-    assert len(network["resistors"]) == len(centres)
+    pads = {d["net_start"][0] for d in data.values() if d["type"] == "PAD"}
+    links = [{r.node1, r.node2} for r in network["resistors"]]
+    (star,) = set.intersection(*links)
+    assert sorted(links, key=min) == [{pad, star} for pad in sorted(pads)]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="overlapping zones are linked but extract_network ignores it",
-)
 def test_overlapping_zones_conduct(cu_stack: dict[int, Any]) -> None:
     import get_parasitic as gp
 

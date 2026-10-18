@@ -9,17 +9,19 @@ from itertools import combinations
 from typing import Any, NamedTuple
 
 try:
-    from .get_distance import dijkstra, find_all_reachable_nodes
+    from .get_distance import DisjointSets, dijkstra, find_all_reachable_nodes
 except ImportError:
-    from get_distance import dijkstra, find_all_reachable_nodes
+    from get_distance import DisjointSets, dijkstra, find_all_reachable_nodes
 try:
     from .get_parasitic import (
+        ZONE_LINK_OHM,
         extract_network,
         find_path,
         simulate_network,
     )
 except ImportError:
     from get_parasitic import (
+        ZONE_LINK_OHM,
         extract_network,
         find_path,
         simulate_network,
@@ -67,15 +69,7 @@ def selection_ends(data: dict[str, Any]) -> list[MeasurementPoint]:
     without a selected track, or the end of a run of tracks. Zones have no
     single connection point and are left out.
     """
-    parent: dict[int, int] = {}
-
-    def find(node: int) -> int:
-        parent.setdefault(node, node)
-        while parent[node] != node:
-            parent[node] = parent[parent[node]]
-            node = parent[node]
-        return node
-
+    points: DisjointSets[int] = DisjointSets()
     position: dict[int, Point] = {}
     layer_of: dict[int, int] = {}
     tracks: Counter[int] = Counter()  # selected tracks per node
@@ -85,7 +79,7 @@ def selection_ends(data: dict[str, Any]) -> list[MeasurementPoint]:
         if d["type"] != WIRE:
             nodes = [d["net_start"][layer] for layer in d["layer"]]
             for node in nodes:
-                parent[find(node)] = find(nodes[0])
+                points.union(node, nodes[0])
             if d["is_selected"]:
                 for layer, node in zip(d["layer"], nodes):
                     layer_of[node] = layer
@@ -98,12 +92,12 @@ def selection_ends(data: dict[str, Any]) -> list[MeasurementPoint]:
                     layer_of[node] = layer
                     position.setdefault(node, pos)
 
-    points: defaultdict[int, list[int]] = defaultdict(list)
+    nodes_of: defaultdict[int, list[int]] = defaultdict(list)
     for node in layer_of:
-        points[find(node)].append(node)
+        nodes_of[points.find(node)].append(node)
     return [
         MeasurementPoint(position[nodes[0]], {layer_of[n]: n for n in nodes})
-        for nodes in points.values()
+        for nodes in nodes_of.values()
         if sum(tracks[n] for n in nodes) <= 1
     ]
 
@@ -345,8 +339,16 @@ def format_result_message(
 
     if short_path_RES is not None:
         lines.append(f"Shortest path resistance ≈ {short_path_RES * 1000:.3f} mΩ")
-        if short_path_RES == 0:
-            lines.append("(Zones treated as ideal conductors)")
+        on_path = set(result["path"])
+        if any(
+            e["type"] == ZONE and set(e["nodes"]) <= on_path
+            for e in result["network_info"]
+        ):
+            link = format_si(ZONE_LINK_OHM, "Ω")
+            lines.append(
+                f"(zones on the path count as nearly ideal conductors: {link} "
+                "per connection, no length)"
+            )
     else:
         log_file = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "debug_parasitic.log"

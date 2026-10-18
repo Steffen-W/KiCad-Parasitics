@@ -113,7 +113,7 @@ Model: R-L in series, C parallel to planes
 
 ### Zones
 
-All elements connected to the same zone are treated as low-resistance connections (1 mΩ).
+A zone is a nearly ideal conductor: every element touching it is linked with 1 mΩ to one star node of the zone, and zones that overlap on a layer share their star node. The links have no length, so the reported path length does not count the way across a zone.
 
 ### Inductance
 
@@ -126,7 +126,7 @@ Requires `bfieldtools`, `trimesh` and `scipy`, which `plugins/requirements.txt` 
 
 - **Pads**: Treated as ideal connection points with negligible resistance.
 - **Wire connections**: Connections are always made to the **start or end of a trace**, never to a point in the middle.
-- **Path length**: The reported distance is the sum of trace lengths along the path, not straight-line distance.
+- **Path length**: The reported distance is the sum of trace and via lengths along the path, not straight-line distance; crossing a zone adds no length.
 - **Stacked traces**: Multiple traces on different layers connected by vias at both ends may be treated as parallel paths.
 - **Coupled lines**: Mutual inductance/capacitance between adjacent traces is not considered. This also means **PCB inductors** (spirals, meanders) cannot be calculated or detected. *(Contributions welcome!)*
 - **Inductance – shortest path only**: The inductance uses only the shortest path between the two selected points. Parallel paths or alternative routes are ignored.

@@ -4,8 +4,10 @@ from collections import defaultdict
 from typing import Any
 
 try:
+    from .get_distance import DisjointSets
     from .pcb_types import WIRE, ZONE
 except ImportError:
+    from get_distance import DisjointSets
     from pcb_types import WIRE, ZONE
 
 # Node IDs are > 0; 0 marks an endpoint without a node.
@@ -39,17 +41,8 @@ def Connect_Nets(data: dict[Any, Any]) -> dict[Any, dict[str, Any]]:
     Raises:
         ValueError: touching endpoints carry different preset node IDs
     """
-    parent: dict[Endpoint, Endpoint] = {}
-
-    def find(e: Endpoint) -> Endpoint:
-        parent.setdefault(e, e)
-        while parent[e] != e:
-            parent[e] = parent[parent[e]]
-            e = parent[e]
-        return e
-
-    def union(a: Endpoint, b: Endpoint) -> None:
-        parent[find(a)] = find(b)
+    groups: DisjointSets[Endpoint] = DisjointSets()
+    find, union = groups.find, groups.union
 
     def touching_endpoint(
         conn: Any, uuid: Any, layer: int, pos: Any

@@ -26,6 +26,8 @@ def _result(**overrides: Any) -> dict[str, Any]:
         "skipped": [],
         "measured": [],
         "free_ends": 0,
+        "path": [1, 2],
+        "network_info": [],
     }
     result.update(overrides)
     return result
@@ -54,6 +56,17 @@ def test_choice_among_free_ends_is_noted(
 
     assert "to (5.000, 0.000) mm on F.Cu" in text
     assert ("farthest apart of 3 free ends" in text) is noted
+
+
+@pytest.mark.parametrize(("link_type", "noted"), [("ZONE", True), ("WIRE", False)])
+def test_zone_crossing_is_noted(
+    cu_stack: dict[int, Any], link_type: str, noted: bool
+) -> None:
+    link = {"type": link_type, "nodes": (1, 2)}
+
+    text = format_result_message(_result(network_info=[link]), cu_stack)
+
+    assert ("zones on the path count as nearly ideal" in text) is noted
 
 
 def test_failed_simulations_are_marked(cu_stack: dict[int, Any]) -> None:

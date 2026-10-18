@@ -7,8 +7,6 @@ from collections import defaultdict
 from contextlib import closing
 from typing import Any, Callable, NamedTuple, Union
 
-import numpy as np
-
 # Resistance tying each port node to GND. It must stay far above any port
 # impedance (loading error < 1e-7 at 50 Ω) yet close enough to milliohm trace
 # resistances for a well-conditioned matrix; 1e15 Ω made the DC operating point
@@ -33,6 +31,7 @@ class Resistor(NamedTuple):
 try:
     from .analysis_progress import Progress, Stage, no_progress, report
     from .get_distance import (
+        DisjointSets,
         find_all_reachable_nodes,
         find_shortest_path,
         get_graph_from_edges,
@@ -45,7 +44,6 @@ try:
         get_Via_Parasitics,
     )
     from .pcb_types import (
-        PAD,
         VIA,
         WIRE,
         ZONE,
@@ -57,6 +55,7 @@ try:
 except ImportError:
     from analysis_progress import Progress, Stage, no_progress, report
     from get_distance import (
+        DisjointSets,
         find_all_reachable_nodes,
         find_shortest_path,
         get_graph_from_edges,
@@ -69,7 +68,6 @@ except ImportError:
         get_Via_Parasitics,
     )
     from pcb_types import (
-        PAD,
         VIA,
         WIRE,
         ZONE,
@@ -494,15 +492,86 @@ def Get_shortest_path_RES(path: list[int], resistors: list[Resistor]) -> float:
     )
 
 
+# Resistance from each connection of a zone to its star node: zones are nearly
+# ideal conductors, the simulator needs a finite value.
+ZONE_LINK_OHM = 1e-3
+
+
+def _zone_links(
+    data: dict[Any, Any], CuStack: dict[int, CuLayer]
+) -> list[NetworkElement]:
+    """A star node per zone area and layer, linked to every node touching it.
+
+    Zones that touch on a layer form one area. The links have no length, so a
+    path crosses a zone as an ideal conductor. An area touched at a single node
+    carries no current and gets no star. Star nodes follow the node IDs of
+    Connect_Nets.
+    """
+    zones = {d["id"]: d for d in data.values() if d["type"] == ZONE}
+    next_node = 1 + max(
+        (
+            n
+            for d in data.values()
+            if d["type"] != ZONE
+            for side in (
+                ("net_start", "net_end") if d["type"] == WIRE else ("net_start",)
+            )
+            for n in d[side].values()
+        ),
+        default=0,
+    )
+    links: list[NetworkElement] = []
+    for layer in sorted({layer for z in zones.values() for layer in z["layer"]}):
+        areas: DisjointSets[str] = DisjointSets()
+        touching: defaultdict[str, set[int]] = defaultdict(set)
+        for zone_id, z in zones.items():
+            if layer not in z["layer"]:
+                continue
+            for conn in z["conn_start"]:
+                c = data.get(conn)
+                if c is None or layer not in c["layer"]:
+                    continue
+                if c["type"] == ZONE:
+                    areas.union(zone_id, conn)
+                elif c["type"] == WIRE:
+                    touching[zone_id].update(
+                        c[side][layer]
+                        for side, key in (
+                            ("net_start", "conn_start"),
+                            ("net_end", "conn_end"),
+                        )
+                        if zone_id in c[key]
+                    )
+                else:
+                    touching[zone_id].add(c["net_start"][layer])
+        nodes_of: defaultdict[str, set[int]] = defaultdict(set)
+        for zone_id, nodes in touching.items():
+            nodes_of[areas.find(zone_id)] |= nodes
+        layer_name = CuStack[layer]["name"] if layer in CuStack else f"Layer_{layer}"
+        for nodes in nodes_of.values():
+            if len(nodes) < 2:
+                continue
+            star, next_node = next_node, next_node + 1
+            links += [
+                {
+                    "type": ZONE,
+                    "nodes": (node, star),
+                    "resistance": ZONE_LINK_OHM,
+                    "length": 0.0,
+                    "layer": layer,
+                    "layer_name": layer_name,
+                }
+                for node in sorted(nodes)
+            ]
+    return links
+
+
 def extract_network(
     data: dict[Any, Any],
     CuStack: dict[int, CuLayer],
     progress: Progress = no_progress,
 ) -> dict[str, Any]:
     """Extract electrical network from PCB data (DC resistances only).
-
-    # TODO: Split into separate functions for wire, via, and zone resistance
-    # calculation; function is currently ~230 lines.
 
     Args:
         data: PCB element data dictionary
@@ -516,7 +585,6 @@ def extract_network(
         dict with:
             resistors: list of Resistor
             network_info: list of element dicts (WIRE/VIA/ZONE) with geometric data
-            coordinates: dict {node: (x, y, z)}
             area: dict {layer: area}
             graph: adjacency dict from get_graph_from_edges
             skipped: descriptions of the elements that were left out
@@ -526,7 +594,6 @@ def extract_network(
 
     resistors: list[Resistor] = []
     network_info: list[NetworkElement] = []
-    coordinates: dict[int, tuple[float, float, float]] = {}
     Area: defaultdict[int, float] = defaultdict(float)
     skipped: list[str] = []
 
@@ -549,11 +616,6 @@ def extract_network(
                     node = d["net_start"][layer]
                     if node > 0:
                         nodes.append((layer, node))
-                        coordinates[node] = (
-                            d["position"][0],
-                            d["position"][1],
-                            CuStack[layer]["abs_height"],
-                        )
 
             # Connect all layer nodes of this via/pad
             if len(nodes) > 1:
@@ -653,94 +715,11 @@ def extract_network(
                     info["midline_pts"] = d["midline_pts"]
                 network_info.append(info)
 
-                coordinates[netStart] = (
-                    d["start"][0],
-                    d["start"][1],
-                    CuStack[Layer]["abs_height"],
-                )
-                coordinates[netEnd] = (
-                    d["end"][0],
-                    d["end"][1],
-                    CuStack[Layer]["abs_height"],
-                )
-
-            elif d["type"] == PAD:
-                # Single-layer pad - just record its position
-                if Layer in d.get("net_start", {}):
-                    node = d["net_start"][Layer]
-                    if node > 0:
-                        coordinates[node] = (
-                            d["position"][0],
-                            d["position"][1],
-                            CuStack[Layer]["abs_height"],
-                        )
-
     area = {layer: a for layer, a in Area.items() if a > 0}
 
-    # Handle ZONES: connect all elements touching the same zone
-    zone_connections: dict[int, dict[Any, list[int]]] = {}
-    for uuid, d in data.items():
-        if d["type"] != ZONE:
-            continue
-
-        zone_conns = d.get("conn_start", [])
-        for layer in d.get("layer", []):
-            if layer not in zone_connections:
-                zone_connections[layer] = {}
-            if uuid not in zone_connections[layer]:
-                zone_connections[layer][uuid] = []
-
-            for conn_uuid in zone_conns:
-                if conn_uuid not in data:
-                    continue
-                conn_item = data[conn_uuid]
-                if layer not in conn_item.get("layer", []):
-                    continue
-
-                if conn_item.get("type") == WIRE:
-                    # Only add the wire end that touches the zone
-                    for conn_type, net_type in (
-                        ("conn_start", "net_start"),
-                        ("conn_end", "net_end"),
-                    ):
-                        nets = conn_item.get(net_type, {})
-                        if uuid in conn_item.get(conn_type, []) and layer in nets:
-                            node = nets[layer]
-                            if node > 0 and node not in zone_connections[layer][uuid]:
-                                zone_connections[layer][uuid].append(node)
-                else:
-                    if "net_start" in conn_item and layer in conn_item["net_start"]:
-                        node = conn_item["net_start"][layer]
-                        if node > 0 and node not in zone_connections[layer][uuid]:
-                            zone_connections[layer][uuid].append(node)
-
-    # Connect zone nodes with low resistance
-    zone_resistance = 0.001  # 1 mOhm
-    for layer, zones in zone_connections.items():
-        layer_name = CuStack[layer]["name"] if layer in CuStack else f"Layer_{layer}"
-        for zone_nodes in zones.values():
-            for i, node1 in enumerate(zone_nodes):
-                for node2 in zone_nodes[i + 1 :]:
-                    zone_distance = 0.0
-                    if node1 in coordinates and node2 in coordinates:
-                        c1 = coordinates[node1]
-                        c2 = coordinates[node2]
-                        zone_distance = np.sqrt(
-                            (c1[0] - c2[0]) ** 2 + (c1[1] - c2[1]) ** 2
-                        )
-                    resistors.append(
-                        Resistor(node1, node2, zone_resistance, zone_distance)
-                    )
-                    network_info.append(
-                        {
-                            "type": ZONE,
-                            "nodes": (node1, node2),
-                            "resistance": zone_resistance,
-                            "length": zone_distance,
-                            "layer": layer,
-                            "layer_name": layer_name,
-                        }
-                    )
+    for link in _zone_links(data, CuStack):
+        resistors.append(Resistor(*link["nodes"], link["resistance"], link["length"]))
+        network_info.append(link)
 
     # Build graph
     edges = [(r.node1, r.node2, r.length) for r in resistors]
@@ -749,7 +728,6 @@ def extract_network(
     return {
         "resistors": resistors,
         "network_info": network_info,
-        "coordinates": coordinates,
         "area": area,
         "graph": graph,
         "skipped": skipped,
