@@ -156,8 +156,10 @@ def _path_notes(path: list[int], network_info: list[NetworkElement]) -> list[str
         return []
     link = format_si(ZONE_LINK_OHM, "Ω")
     return [
-        f"Zones on the path count as nearly ideal conductors: {link} per "
-        "connection, and crossing them adds no length."
+        (
+            f"Zones on the path count as nearly ideal conductors: {link} per "
+            "connection, and crossing them adds no length."
+        )
     ]
 
 
@@ -177,8 +179,10 @@ def _islands_error(
         else:
             island[1].append(end)
     lines = [
-        "The selection is not connected by copper, so no single path stands "
-        f"for it. Its free ends lie on {len(islands)} separate copper islands:"
+        (
+            "The selection is not connected by copper, so no single path stands "
+            f"for it. Its free ends lie on {len(islands)} separate copper islands:"
+        )
     ]
     for i, (_, members) in enumerate(islands, 1):
         lines += [f"  Island {i}:"]

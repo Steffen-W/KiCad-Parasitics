@@ -19,10 +19,10 @@ from board_model import (
     Copper,
     NetTie,
     Selected,
+    Stackup,
     build_cu_stack,
     dielectric,
     net_tie,
-    Stackup,
     read_board,
     slot_drill,
     via,
@@ -31,6 +31,8 @@ from board_model import (
 from pcb_types import BoardElement
 from read_board_ipc import IpcBoard
 from stackup_file import read_stackup_file
+
+_NO_STACKUP = Stackup([])
 
 
 class FakeBoard:
@@ -41,7 +43,7 @@ class FakeBoard:
         selection: list[Selected],
         ties: Sequence[NetTie] = (),
         extra: Sequence[BoardElement] = (),
-        stackup: Stackup = Stackup([]),
+        stackup: Stackup = _NO_STACKUP,
         unmodelled: Sequence[str] = (),
     ) -> None:
         self._selection = selection
@@ -218,9 +220,11 @@ def test_file_stackup_falls_back_to_two_layers(
     assert {k: v["name"] for k, v in stack.items()} == {0: "F.Cu", 2: "B.Cu"}
     assert stack[2]["abs_height"] + stack[2]["thickness"] == pytest.approx(1e-3)
     assert board.notes == [
-        "No usable stackup was found, so a two-layer FR4 board of 1 mm with 35 µm "
-        "copper is assumed. Define the stackup in Board Setup (for the pcbnew "
-        "plugin, then save the board)."
+        (
+            "No usable stackup was found, so a two-layer FR4 board of 1 mm with 35 µm "
+            "copper is assumed. Define the stackup in Board Setup (for the pcbnew "
+            "plugin, then save the board)."
+        )
     ]
 
 
@@ -233,8 +237,10 @@ def test_unmodelled_copper_is_noted() -> None:
     )
 
     assert read_board(source).notes == [
-        "3 copper shape(s) of these nets (circle, polygon ×2) are not part of the "
-        "model, so current through them is not counted."
+        (
+            "3 copper shape(s) of these nets (circle, polygon ×2) are not part of "
+            "the model, so current through them is not counted."
+        )
     ]
 
 
