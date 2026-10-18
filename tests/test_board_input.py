@@ -23,6 +23,7 @@ from board_model import (
     net_tie,
     read_board,
     via,
+    wire,
 )
 from pcb_types import BoardElement, CuLayer
 from read_board_ipc import IpcBoard
@@ -32,9 +33,15 @@ from stackup_file import read_stackup_file
 class FakeBoard:
     """BoardSource with one via per net; records the nets asked for."""
 
-    def __init__(self, selection: list[Selected], ties: Sequence[NetTie] = ()) -> None:
+    def __init__(
+        self,
+        selection: list[Selected],
+        ties: Sequence[NetTie] = (),
+        extra: Sequence[BoardElement] = (),
+    ) -> None:
         self._selection = selection
         self._ties = list(ties)
+        self._extra = list(extra)
         self.nets: AbstractSet[str] = set()
 
     def selection(self) -> list[Selected]:
@@ -47,7 +54,8 @@ class FakeBoard:
         self, nets: AbstractSet[str], net_ties: Sequence[NetTie]
     ) -> Iterable[BoardElement]:
         self.nets = nets
-        return [via(f"v{net}", net, [0], (0.0, 0.0), 1e-3, 5e-4) for net in "ABCD"]
+        vias = [via(f"v{net}", net, [0], (0.0, 0.0), 1e-3, 5e-4) for net in "ABCD"]
+        return [*vias, *self._extra]
 
     def stackup(self) -> dict[int, CuLayer]:
         return build_cu_stack([])
@@ -56,10 +64,9 @@ class FakeBoard:
 @pytest.mark.parametrize(
     ("selection", "message"),
     [
-        ([Selected("vA", "A")], "exactly two"),
-        ([Selected("vA", "A"), Selected("text")], "with a net"),
+        ([], "Nothing to measure"),
+        ([Selected("text")], "Nothing to measure"),
         ([Selected("vA", "A"), Selected("vB", "B")], "same net"),
-        ([Selected("vA", "A"), Selected("pad", "A")], "pads, vias, tracks or zones"),
     ],
 )
 def test_invalid_selection(selection: list[Selected], message: str) -> None:
@@ -67,16 +74,33 @@ def test_invalid_selection(selection: list[Selected], message: str) -> None:
         read_board(FakeBoard(selection))
 
 
-def test_footprint_stands_for_its_two_pads() -> None:
+def test_selection_off_the_enabled_copper_layers_is_rejected() -> None:
+    disabled = via("vX", "A", [], (0.0, 0.0), 1e-3, 5e-4)
+    selection = [Selected("vA", "A"), Selected("vX", "A")]
+
+    with pytest.raises(BoardInputError, match="1 selected item"):
+        read_board(FakeBoard(selection, extra=[disabled]))
+
+
+def test_selected_zero_length_track_is_left_out() -> None:
+    dot = wire("w0", "A", [0], (0.0, 0.0), (0.0, 0.0), 2e-4)
+    selection = [Selected("vA", "A"), Selected("w0", "A")]
+
+    board = read_board(FakeBoard(selection, extra=[dot]))
+
+    assert "w0" not in board.elements
+
+
+def test_footprints_stand_for_their_pads_and_items_without_net_are_ignored() -> None:
     footprint = Selected("fp", pads=(Selected("vA", "A"), Selected("vC", "A")))
 
-    board = read_board(FakeBoard([footprint]))
+    board = read_board(FakeBoard([footprint, Selected("text"), Selected("vD", "A")]))
 
     assert [e["is_selected"] for e in board.elements.values()] == [
         True,
         False,
         True,
-        False,
+        True,
     ]
 
 

@@ -359,7 +359,7 @@ class Selected(NamedTuple):
     """A selected board item."""
 
     id: str
-    net: str = ""  # copper net; empty for items without one
+    net: str = ""  # net of a track, via or pad; empty for anything else
     pads: tuple[Selected, ...] = ()  # a footprint's pads
 
 
@@ -412,21 +412,21 @@ class Board:
     net_ties: list[str]  # references of the Net Ties joining the nets
 
 
-def _selected_pair(selection: list[Selected]) -> tuple[Selected, Selected]:
-    """The two selected copper items; a lone footprint stands for its two pads."""
-    if len(selection) == 1 and len(selection[0].pads) == 2:
-        selection = list(selection[0].pads)
-    if len(selection) != 2:
+def _selected_items(selection: list[Selected]) -> list[Selected]:
+    """The selected tracks, vias and pads; a footprint stands for its pads.
+    Anything else (zones, text, graphics) is no measurement point and left out."""
+    items = [item for s in selection for item in (s.pads or (s,)) if item.net]
+    if not items:
         raise BoardInputError(
-            f"Select exactly two elements (selected: {len(selection)})."
+            "Nothing to measure is selected. Select in KiCad what to measure "
+            "across:\n"
+            "  - two pads or vias\n"
+            "  - a footprint with two pads; as a Net Tie (e.g. a PCB coil)\n"
+            "    it may join two nets\n"
+            "  - a single track or a whole run of tracks\n"
+            "These can be combined, e.g. a coil footprint with its feed tracks."
         )
-    first, second = selection
-    if not (first.net and second.net):
-        raise BoardInputError(
-            "Both selected elements must be copper items with a net "
-            "(pads, vias, tracks or zones)."
-        )
-    return first, second
+    return items
 
 
 def _joined_nets(net: str, net_ties: list[NetTie]) -> tuple[set[str], list[NetTie]]:
@@ -443,31 +443,41 @@ def _joined_nets(net: str, net_ties: list[NetTie]) -> tuple[set[str], list[NetTi
 
 
 def read_board(source: BoardSource) -> Board:
-    """The connected copper of the nets that join the two selected items.
+    """The connected copper of the nets of the selected items.
+
+    Which points of the selection are measured between is decided on the
+    connected nodes, see parasitic.selection_ends.
 
     Raises:
-        BoardInputError: the selection is not two copper items of one net
-            (or of nets joined by Net Ties)
+        BoardInputError: the selection holds no track, via or pad, holds items
+            of nets not joined by Net Ties, or items on no enabled copper layer
     """
-    first, second = _selected_pair(source.selection())
-    nets, net_ties = _joined_nets(first.net, source.net_ties())
-    if second.net not in nets:
+    items = _selected_items(source.selection())
+    nets, net_ties = _joined_nets(items[0].net, source.net_ties())
+    if any(item.net not in nets for item in items):
+        found = ", ".join(sorted({item.net for item in items}))
         raise BoardInputError(
             "Selected elements must belong to the same net or be connected by "
-            f"a Net Tie (found: {first.net}, {second.net})."
+            f"a Net Tie (found: {found})."
         )
     log.info("Nets %s, joined by %s", sorted(nets), [t.ref for t in net_ties])
 
+    selected = {item.id for item in items}
     elements: dict[str, BoardElement] = {}
+    zero_length: set[str] = set()  # no resistance, and both ends coincide
     for element in source.copper(nets, net_ties):
         if element["type"] == WIRE and element["length"] == 0:
-            continue  # no resistance to model
-        element["is_selected"] = element["id"] in (first.id, second.id)
+            zero_length.add(element["id"])
+            continue
+        element["is_selected"] = element["id"] in selected
         elements[element["id"]] = element
-    if sum(e["is_selected"] for e in elements.values()) != 2:
+    on_copper = {id for id, e in elements.items() if e["layer"]}
+    unusable = selected - zero_length - on_copper
+    if unusable:
         raise BoardInputError(
-            "Both selected elements must be pads, vias, tracks or zones "
-            "on an enabled copper layer."
+            f"{len(unusable)} selected item(s) lie on no enabled copper layer, "
+            "so they cannot be measured. Deselect them in KiCad, or enable "
+            "their copper layer in Board Setup."
         )
     log.info("Read %d elements", len(elements))
 

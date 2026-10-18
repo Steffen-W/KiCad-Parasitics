@@ -24,6 +24,8 @@ def _result(**overrides: Any) -> dict[str, Any]:
         "area": {},
         "spice_unavailable": None,
         "skipped": [],
+        "measured": [],
+        "free_ends": 0,
     }
     result.update(overrides)
     return result
@@ -38,6 +40,20 @@ def test_valid_result(cu_stack: dict[int, Any]) -> None:
 
 def _row(text: str, label: str) -> str:
     return next(line for line in text.splitlines() if line.strip().startswith(label))
+
+
+@pytest.mark.parametrize(("free_ends", "noted"), [(2, False), (3, True)])
+def test_choice_among_free_ends_is_noted(
+    cu_stack: dict[int, Any], free_ends: int, noted: bool
+) -> None:
+    measured = ["(0.000, 0.000) mm on F.Cu", "(5.000, 0.000) mm on F.Cu"]
+
+    text = format_result_message(
+        _result(measured=measured, free_ends=free_ends), cu_stack
+    )
+
+    assert "to (5.000, 0.000) mm on F.Cu" in text
+    assert ("farthest apart of 3 free ends" in text) is noted
 
 
 def test_failed_simulations_are_marked(cu_stack: dict[int, Any]) -> None:
@@ -66,13 +82,20 @@ def test_no_path(cu_stack: dict[int, Any]) -> None:
     assert "ngspice simulation failed" in text
 
 
-def test_directly_touching_elements_are_reported() -> None:
+def _select_wires(data: dict[Any, dict[str, Any]]) -> dict[Any, dict[str, Any]]:
+    """`data` with all wires selected: the free ends are the coil's two ends."""
+    for d in data.values():
+        d["is_selected"] = d["type"] == "WIRE"
+    return data
 
-    pad = {"type": "PAD", "layer": [0], "net_start": {0: 1}}
-    result = parasitic.analyze_pcb_parasitic({}, {}, pad, dict(pad))
 
-    assert result["error"] is not None
-    assert "touch each other directly" in result["error"]
+def test_selection_without_two_free_ends_is_reported() -> None:
+    touching_pad = {"type": "PAD", "position": (0.0, 0.0), "net_start": {0: 1}}
+    data = {i: {**touching_pad, "is_selected": True, "layer": [0]} for i in range(2)}
+
+    result = parasitic.analyze_pcb_parasitic(data, {})
+
+    assert "no two free ends" in result["error"]
 
 
 def test_missing_ngspice_keeps_path_results(
@@ -86,24 +109,14 @@ def test_missing_ngspice_keeps_path_results(
         raise SpiceUnavailableError("ngspice library could not be loaded")
 
     monkeypatch.setattr(parasitic, "simulate_network", unavailable)
-    wires = [d for d in coil_data.values() if d["type"] == "WIRE"]
-
-    result = parasitic.analyze_pcb_parasitic(coil_data, cu_stack, wires[0], wires[-1])
+    result = parasitic.analyze_pcb_parasitic(_select_wires(coil_data), cu_stack)
     text = format_result_message(result, cu_stack)
 
     assert result["short_path_resistance"] is not None
     assert result["network_info"]
     assert "Shortest path resistance" in text
+    assert "Measured from" in text
     assert "ngspice library could not be loaded" in text
-
-
-def test_zones_are_rejected_as_measurement_points() -> None:
-
-    zone = {"type": "ZONE", "layer": [0], "net_start": {}}
-    result = parasitic.analyze_pcb_parasitic({}, {}, zone, dict(zone))
-
-    assert result["error"] is not None
-    assert "zones have no single connection point" in result["error"]
 
 
 @pytest.mark.parametrize("cancel_stage", list(Stage))
@@ -112,15 +125,10 @@ def test_cancel_ends_the_analysis(
     cu_stack: dict[int, Any],
     cancel_stage: Stage,
 ) -> None:
-
-    wires = [d for d in coil_data.values() if d["type"] == "WIRE"]
-
     with pytest.raises(CancelledError):
         parasitic.analyze_pcb_parasitic(
-            coil_data,
+            _select_wires(coil_data),
             cu_stack,
-            wires[0],
-            wires[-1],
             progress=lambda stage, _finished, _total: stage != cancel_stage,
         )
 

@@ -14,6 +14,9 @@ from kipy.board_types import (
     BoardPolygon,
     BoardSegment,
     FootprintInstance,
+    Pad,
+    Track,
+    Via,
 )
 from kipy.errors import ApiError
 from kipy.proto.board.board_pb2 import BoardStackupLayerType
@@ -91,7 +94,9 @@ def _selected(item: Any) -> Selected:
         return Selected(
             str(item.id.value), pads=tuple(map(_selected, item.definition.pads))
         )
-    return Selected(str(item.id.value), item.net.name if hasattr(item, "net") else "")
+    if isinstance(item, (Track, ArcTrack, Via, Pad)):
+        return Selected(str(item.id.value), item.net.name)
+    return Selected(str(item.id.value))
 
 
 class IpcBoard:

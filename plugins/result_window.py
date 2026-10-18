@@ -80,7 +80,7 @@ def _save_debug_file(name: str, data: Any) -> None:
 
 
 def _analyze(board: Board, task: _Task) -> dict[str, Any]:
-    """Analysis between the two selected elements of `board`.
+    """Analysis across the selected elements of `board`.
 
     With PARASITIC_DEBUG set, the elements and the network are also written to
     files (debug_ItemList.json is read by plot_pcb.py).
@@ -89,12 +89,9 @@ def _analyze(board: Board, task: _Task) -> dict[str, Any]:
     data = Connect_Nets(board.elements)
     if debug:
         _save_debug_file("debug_ItemList.json", data)
-    first, second = (d for d in data.values() if d["is_selected"])
     result = analyze_pcb_parasitic(
         data,
         board.cu_stack,
-        first,
-        second,
         frequencies=_FREQUENCIES,
         progress=task.report,
     )
@@ -183,27 +180,24 @@ class ResultFrame(wx.Frame):
         self._gauge = wx.Gauge(panel, range=100, size=wx.Size(160, -1))
         self._cancel = wx.Button(panel, wx.ID_CANCEL)
 
-        notebook = wx.Notebook(panel)
+        notebook = self._notebook = wx.Notebook(panel)
         self._summary = self._text_page(notebook, "Result", font)
         self._details = self._text_page(notebook, "Network", font)
-        page = wx.Panel(notebook)
-        self._calc = wx.Button(page, label="Calculate inductance")
+        page = self._ind_page = wx.Panel(notebook)
         self._plots = wx.Button(page, label="Debug plots")
         self._ind_text = self._text(page, font)
-        row = wx.BoxSizer(wx.HORIZONTAL)
-        row.Add(self._calc, 0, wx.RIGHT, 5)
-        row.Add(self._plots)
         column = wx.BoxSizer(wx.VERTICAL)
-        column.Add(row, 0, wx.ALL, 5)
+        column.Add(self._plots, 0, wx.ALL, 5)
         column.Add(self._ind_text, 1, wx.EXPAND)
         page.SetSizer(column)
         notebook.AddPage(page, "Inductance")
 
-        self._analyze_btn = wx.Button(panel, label="Analyze selection")
+        self._calc = wx.Button(panel, label="Calculate inductance")
+        self._refresh = wx.Button(panel, label="Refresh")
         bottom = wx.BoxSizer(wx.HORIZONTAL)
         bottom.Add(self._status, 1, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
         bottom.Add(self._gauge, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
-        for button in (self._cancel, self._analyze_btn):
+        for button in (self._cancel, self._calc, self._refresh):
             bottom.Add(button, 0, wx.RIGHT, 5)
         bottom.Add(wx.Button(panel, wx.ID_CLOSE))
         sizer = wx.BoxSizer(wx.VERTICAL)
@@ -214,7 +208,7 @@ class ResultFrame(wx.Frame):
         self.Bind(wx.EVT_TIMER, self._on_tick, self._timer)
         self.Bind(wx.EVT_CLOSE, self._on_close)
         self._cancel.Bind(wx.EVT_BUTTON, self._on_cancel)
-        self._analyze_btn.Bind(wx.EVT_BUTTON, lambda _e: self.analyze())
+        self._refresh.Bind(wx.EVT_BUTTON, lambda _e: self.analyze())
         self._calc.Bind(wx.EVT_BUTTON, self._on_calculate_inductance)
         self._plots.Bind(wx.EVT_BUTTON, self._on_debug_plots)
         self.Bind(wx.EVT_BUTTON, lambda _e: self.Close(), id=wx.ID_CLOSE)
@@ -245,7 +239,7 @@ class ResultFrame(wx.Frame):
     def _set_busy(self, status: str, cancellable: bool) -> None:
         self._status.SetLabel(status)
         self._show_progress(True, cancellable)
-        for button in (self._analyze_btn, self._calc, self._plots):
+        for button in (self._refresh, self._calc, self._plots):
             button.Disable()
         self._timer.Start(_TICK_MS)
 
@@ -253,7 +247,7 @@ class ResultFrame(wx.Frame):
         self._timer.Stop()
         self._status.SetLabel(status)
         self._show_progress(False, False)
-        self._analyze_btn.Enable()
+        self._refresh.Enable()
         self._calc.Enable(bool(self._result and self._result.get("path")))
         self._plots.Enable(
             bool(self._inductance and self._inductance.get("_debug_data"))
@@ -316,11 +310,13 @@ class ResultFrame(wx.Frame):
             board = read_board(self._open_board())
         except BoardInputError as e:
             log.warning("Board input: %s", e)
-            self._show_board_message(str(e))
+            self._show_board_message(
+                str(e), "Select pads, vias or tracks in KiCad, then click Refresh."
+            )
             return
         except Exception as e:
             log.exception("Reading the board failed")
-            self._show_board_message(_failure_text(e))
+            self._show_board_message(_failure_text(e), "Reading the board failed.")
             return
         self._show_board(board)
         self._run(
@@ -341,10 +337,10 @@ class ResultFrame(wx.Frame):
             if isinstance(child, wx.Frame):
                 child.Close()
 
-    def _show_board_message(self, message: str) -> None:
+    def _show_board_message(self, message: str, status: str) -> None:
         self._show_board(None)
         self._summary.SetValue(message)
-        self._set_idle("Not analyzed: resolve this in KiCad, then analyze again.")
+        self._set_idle(status)
 
     def _show_result(self, result: dict[str, Any]) -> None:
         board = self._board
@@ -366,6 +362,7 @@ class ResultFrame(wx.Frame):
     def _on_calculate_inductance(self, _event: wx.CommandEvent) -> None:
         result, board = self._result, self._board
         assert result is not None and board is not None
+        self._notebook.SetSelection(self._notebook.FindPage(self._ind_page))
         self._run(
             "Calculating inductance…",
             lambda _task: _inductance(result, board.cu_stack),

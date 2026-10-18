@@ -109,11 +109,12 @@ def test_window_is_reused_and_shows_the_result(rw: ModuleType) -> None:
 
 
 def test_board_input_error_is_shown(rw: ModuleType) -> None:
-    rw.run_plugin(lambda: _Source(selected=("v1",)))
+    rw.run_plugin(lambda: _Source(selected=()))
     _pump(lambda: _idle(rw))
 
-    assert "exactly two" in rw._window._summary.GetValue()
-    assert rw._window._status.GetLabel().startswith("Not analyzed")
+    assert "Nothing to measure" in rw._window._summary.GetValue()
+    assert not rw._window._calc.IsEnabled()
+    assert "click Refresh" in rw._window._status.GetLabel()
 
 
 @pytest.mark.parametrize(

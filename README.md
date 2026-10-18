@@ -25,15 +25,16 @@ ruff check --fix --unsafe-fixes && ruff format
 
 Both plugins read the board the same way; only the API access differs. An adapter per API (`read_board_pcbnew.py`, `read_board_ipc.py`) implements `BoardSource` from `board_model.py` and only converts KiCad objects into the element dicts of `pcb_types.py` (lengths in m, layers as KiCad layer IDs, UUID strings as IDs). `read_board()` then applies the shared rules:
 
-1. **Selection**: exactly two copper items with a net; a single selected footprint with two pads stands for its pads.
-2. **Nets**: the net of the first item plus every net that Net Tie footprints join to it, transitively. The second item must belong to one of them. Only the copper of these nets is read from KiCad.
+1. **Selection**: the selected tracks, arcs, vias and pads; a footprint stands for its pads. Anything else (zones, text, graphics) is no measurement point and left out. A selected item on no enabled copper layer is an error, since it would silently change what is measured.
+2. **Nets**: the net of the first item plus every net that Net Tie footprints join to it, transitively. All other items must belong to one of them. Only the copper of these nets is read from KiCad.
 3. **Copper**: tracks, arcs, vias, pads, copper zones (no rule areas or teardrops) and the copper of the involved Net Ties (segments and arcs as tracks, polygons as zones). Pads and zones are described by their outline.
 4. **Connectivity** (`connectivity.py`): elements touch on a shared layer when wire ends or via/pad centres overlap, such a point lies on a wire or within a pad or zone outline, a wire crosses an outline, or two outlines overlap. KiCad's own connectivity is not used, since the IPC API does not provide it.
 5. **Stackup**: copper and dielectric layers from top to bottom, from the IPC API or, for pcbnew, whose Python API lacks the stackup, from the saved board file. Without a usable stackup, a two-layer FR4 board is assumed.
+6. **Measurement points** (`parasitic.selection_ends`, on the nodes of `connect_nets.py`): selected tracks join the nodes at their ends, a pad or via, selected or not, is one point on all its layers. The free ends are the points of the selection touched by at most one selected track. The analysis measures between the two free ends with the longest shortest path between them; for a pad or via the layer with the shortest path is used. If the free ends lie on separate copper islands, no single path stands for the selection: the analysis stops and lists the ends of each island.
 
 ### Result window
 
-Both plugins show their results in the same non-modal window (`result_window.py`), so KiCad stays usable while it is open. The analysis and the inductance calculation run in a background thread; the window shows their progress and can cancel the analysis. The thread never calls wx: the window polls its progress with a timer and receives its outcome via `wx.CallAfter`. Clicking the plugin button again re-reads the selection and analyzes it in the same window. KiCad starts a new process for every click on the IPC plugin's button; while a window is open for the same KiCad, that process hands the request to it over a local socket (in the user's runtime directory, or a named pipe on Windows) and exits. A reopened window stays above all others for a moment so it does not end up behind KiCad, then stacks normally. Debug plots stay above the window and close with it.
+Both plugins show their results in the same non-modal window (`result_window.py`), so KiCad stays usable while it is open. The analysis and the inductance calculation run in a background thread; the window shows their progress and can cancel the analysis. The thread never calls wx: the window polls its progress with a timer and receives its outcome via `wx.CallAfter`. Clicking the plugin button again, or Refresh in the window, re-reads the selection and analyzes it in the same window; Calculate inductance is enabled once an analysis found a path. KiCad starts a new process for every click on the IPC plugin's button; while a window is open for the same KiCad, that process hands the request to it over a local socket (in the user's runtime directory, or a named pipe on Windows) and exits. A reopened window stays above all others for a moment so it does not end up behind KiCad, then stacks normally. Debug plots stay above the window and close with it.
 
 ## API Support
 
@@ -51,7 +52,7 @@ The simulation uses the ngspice library: a system installation, else the one bun
 
 # How It Works
 
-Select exactly two elements (pads or vias) that belong to the **same net**, or to nets joined by a Net Tie footprint. The plugin then:
+Select what to measure across, all in the **same net** or in nets joined by a Net Tie footprint: two pads or vias, a footprint with two pads, a single track, or a whole run of tracks. The plugin measures between the two free ends of the selection that lie farthest apart along the copper and names them in the result. It then:
 
 1. **Extracts all traces** in that net and builds a resistance network
 2. **Calculates wire resistance** based on trace length, width, and copper thickness from the stackup

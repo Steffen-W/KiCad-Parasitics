@@ -63,7 +63,7 @@ def _outline(polygons: Any) -> list[Point]:
 def _selected(item: Any) -> Selected:
     if isinstance(item, pcbnew.FOOTPRINT):
         return Selected(_id(item), pads=tuple(map(_selected, item.Pads())))
-    if isinstance(item, pcbnew.BOARD_CONNECTED_ITEM):
+    if isinstance(item, (pcbnew.PCB_TRACK, pcbnew.PAD)):  # PCB_TRACK: also arcs, vias
         return Selected(_id(item), item.GetNetname())
     return Selected(_id(item))
 

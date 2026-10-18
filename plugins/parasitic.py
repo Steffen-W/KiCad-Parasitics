@@ -3,17 +3,15 @@ from __future__ import annotations
 import logging
 import math
 import os
-from collections.abc import Sequence
-from typing import Any
+from collections import Counter, defaultdict
+from collections.abc import Iterable, Sequence
+from itertools import combinations
+from typing import Any, NamedTuple
 
 try:
-    from .connect_nets import NOT_ASSIGNED
+    from .get_distance import dijkstra, find_all_reachable_nodes
 except ImportError:
-    from connect_nets import NOT_ASSIGNED
-try:
-    from .get_distance import find_all_reachable_nodes
-except ImportError:
-    from get_distance import find_all_reachable_nodes
+    from get_distance import dijkstra, find_all_reachable_nodes
 try:
     from .get_parasitic import (
         extract_network,
@@ -43,9 +41,9 @@ except ImportError:
     )
     from spice_worker import SpiceUnavailableError
 try:
-    from .pcb_types import CuLayer
+    from .pcb_types import WIRE, ZONE, CuLayer, Point
 except ImportError:
-    from pcb_types import CuLayer
+    from pcb_types import WIRE, ZONE, CuLayer, Point
 
 log = logging.getLogger(__name__)
 
@@ -53,80 +51,160 @@ log = logging.getLogger(__name__)
 _ZIN_TERMINATION_OHM: float = 50.0
 
 
-def _build_path_error(
-    element1: dict[str, Any],
-    element2: dict[str, Any],
-    conn1: int,
-    conn2: int,
-    graph: dict[int, Any],
+class MeasurementPoint(NamedTuple):
+    """A free end of the selection (see selection_ends)."""
+
+    position: Point
+    nodes: dict[int, int]  # layer -> node
+
+
+def selection_ends(data: dict[str, Any]) -> list[MeasurementPoint]:
+    """The free ends of the selected elements of `data` (from Connect_Nets).
+
+    A selected track joins the nodes at its two ends; a pad or via, selected or
+    not, is one point that covers its nodes on all layers. An end is a point of
+    the selection touched by at most one selected track: a selected pad or via
+    without a selected track, or the end of a run of tracks. Zones have no
+    single connection point and are left out.
+    """
+    parent: dict[int, int] = {}
+
+    def find(node: int) -> int:
+        parent.setdefault(node, node)
+        while parent[node] != node:
+            parent[node] = parent[parent[node]]
+            node = parent[node]
+        return node
+
+    position: dict[int, Point] = {}
+    layer_of: dict[int, int] = {}
+    tracks: Counter[int] = Counter()  # selected tracks per node
+    for d in data.values():
+        if d["type"] == ZONE:
+            continue
+        if d["type"] != WIRE:
+            nodes = [d["net_start"][layer] for layer in d["layer"]]
+            for node in nodes:
+                parent[find(node)] = find(nodes[0])
+            if d["is_selected"]:
+                for layer, node in zip(d["layer"], nodes):
+                    layer_of[node] = layer
+                    position[node] = d["position"]  # wins over the track ends there
+        elif d["is_selected"]:
+            for layer in d["layer"]:
+                for side, pos in (("net_start", d["start"]), ("net_end", d["end"])):
+                    node = d[side][layer]
+                    tracks[node] += 1
+                    layer_of[node] = layer
+                    position.setdefault(node, pos)
+
+    points: defaultdict[int, list[int]] = defaultdict(list)
+    for node in layer_of:
+        points[find(node)].append(node)
+    return [
+        MeasurementPoint(position[nodes[0]], {layer_of[n]: n for n in nodes})
+        for nodes in points.values()
+        if sum(tracks[n] for n in nodes) <= 1
+    ]
+
+
+# A measurement point and the layer it is measured on
+_Probe = tuple[MeasurementPoint, int]
+
+
+def _farthest_pair(
+    graph: dict[int, dict[int, float]],
+    ends: list[MeasurementPoint],
+    progress: Progress,
+) -> tuple[_Probe, _Probe] | None:
+    """The two ends with the longest shortest path between them.
+
+    For an end on several layers (pad, via) the layer with the shortest path is
+    used. None for fewer than two ends, or if any two ends are not connected:
+    the selection then spans separate copper islands and no single path
+    stands for it.
+    """
+    # TODO: prefer the top layer when both ends offer it, as measured with a
+    # probe from the top; a track between two vias on B.Cu then includes them.
+    distances = []  # per end except the last: {layer: {node: distance}}
+    for finished, end in enumerate(ends[:-1]):
+        report(progress, Stage.PATH, finished, len(ends) - 1)
+        distances.append(
+            {layer: dijkstra(graph, node)[0] for layer, node in end.nodes.items()}
+        )
+    best: tuple[float, _Probe, _Probe] | None = None
+    for (i, a), (_, b) in combinations(enumerate(ends), 2):
+        distance, layer_a, layer_b = min(
+            (distances[i][la].get(nb, math.inf), la, lb)
+            for la in a.nodes
+            for lb, nb in b.nodes.items()
+        )
+        if math.isinf(distance):
+            return None
+        if best is None or distance > best[0]:
+            best = (distance, (a, layer_a), (b, layer_b))
+    return (best[1], best[2]) if best else None
+
+
+def _point_text(
+    point: MeasurementPoint, layers: Iterable[int], cu_stack: dict[int, CuLayer]
+) -> str:
+    names = ", ".join(cu_stack[k]["name"] if k in cu_stack else str(k) for k in layers)
+    x, y = point.position
+    return f"({x * 1e3:.3f}, {y * 1e3:.3f}) mm on {names}"
+
+
+def _islands_error(
+    ends: list[MeasurementPoint],
+    graph: dict[int, dict[int, float]],
     cu_stack: dict[int, CuLayer],
 ) -> str:
-    """Diagnostic message explaining why no path was found between two nodes."""
-
-    def layer_names(elem: dict[str, Any]) -> str:
-        return ", ".join(
-            cu_stack[layer_id]["name"] if layer_id in cu_stack else str(layer_id)
-            for layer_id in elem.get("layer", [])
-        )
-
-    def elem_line(label: str, elem: dict[str, Any], conn: int) -> str:
-        in_graph = conn in graph
-        status = (
-            f"in graph ({len(graph.get(conn, {}))} neighbors)"
-            if in_graph
-            else "NOT in graph"
-        )
-        return f"  {label}: {elem.get('type', '?')}  net={elem.get('net', '?')!r}  layer={layer_names(elem)}  node={conn}  {status}"
-
-    in1, in2 = conn1 in graph, conn2 in graph
-    if not in1 and not in2:
-        reason = "Neither element is connected to any trace in the copper network."
-    elif not in1:
-        reason = "Element 1 has no connected traces in the copper network."
-    elif not in2:
-        reason = "Element 2 has no connected traces in the copper network."
-    else:
-        reachable = find_all_reachable_nodes(graph, conn1)
-        if conn2 in reachable:
-            reason = "Nodes are connected by BFS but path finding failed — check log."
+    """Message naming the free ends of each copper island of the selection."""
+    islands: list[tuple[set[int], list[MeasurementPoint]]] = []
+    for end in ends:
+        nodes = set(end.nodes.values())
+        island = next((i for i in islands if nodes & i[0]), None)
+        if island is None:
+            reach = nodes.union(*(find_all_reachable_nodes(graph, n) for n in nodes))
+            islands.append((reach, [end]))
         else:
-            reason = (
-                f"Both nodes exist but are in separate copper islands "
-                f"(El.1 can reach {len(reachable)}/{len(graph)} nodes).\n"
-                f"Check for copper gaps or missing vias."
-            )
-
-    return "\n".join(
-        [
-            "No path found between selected elements.",
-            elem_line("El.1", element1, conn1),
-            elem_line("El.2", element2, conn2),
-            f"  Network: {len(graph)} nodes total",
-            reason,
-        ]
+            island[1].append(end)
+    lines = [
+        "The selection is not connected by copper, so no single path stands "
+        f"for it. Its free ends lie on {len(islands)} separate copper islands:"
+    ]
+    for i, (_, members) in enumerate(islands, 1):
+        lines += [f"  Island {i}:"]
+        lines += [f"    {_point_text(end, end.nodes, cu_stack)}" for end in members]
+    lines.append(
+        "Select copper of one island only, or check the board for a copper gap "
+        "or a missing via."
     )
+    return "\n".join(lines)
 
 
 def analyze_pcb_parasitic(
     data: dict[str, Any],
     CuStack: dict[int, CuLayer],
-    element1: dict[str, Any],
-    element2: dict[str, Any],
     frequencies: list[float] | None = None,
     progress: Progress = no_progress,
 ) -> dict[str, Any]:
-    """Analyze parasitic resistance/impedance between two PCB elements.
+    """Analyze parasitic resistance/impedance across the selected elements.
+
+    Measures between the two free ends of the selection (see selection_ends)
+    with the longest shortest path between them.
 
     Args:
-        data: PCB element data from Connect_Nets()
+        data: PCB element data from Connect_Nets(), selected ones marked
         CuStack: Copper stackup (see board_model.build_cu_stack)
-        element1, element2: Selected element dicts
         frequencies: List of frequencies for AC analysis (Hz)
         progress: reports each analysis stage; see Progress
 
     Returns:
         dict with: resistance_dc, impedance_ac, distance, short_path_resistance,
-                   area, network_info, graph, path, conn1, conn2, error,
+                   area, network_info, graph, path, conn1, conn2,
+                   measured (texts naming the two measured points),
+                   free_ends (number of free ends of the selection), error,
                    spice_unavailable (message when ngspice cannot be started),
                    skipped (elements left out of the network, see extract_network)
     Raises:
@@ -143,56 +221,43 @@ def analyze_pcb_parasitic(
         "path": None,
         "conn1": None,
         "conn2": None,
+        "measured": [],
+        "free_ends": 0,
         "error": None,
         "spice_unavailable": None,
         "skipped": [],
     }
 
+    ends = selection_ends(data)
+    if len(ends) < 2:
+        result["error"] = (
+            "The selection has no two free ends to measure between. Select two "
+            "pads or vias, or an open run of tracks; items that touch count as "
+            "one point, and a closed loop has no free end."
+        )
+        return result
+
     network = extract_network(data, CuStack, progress=progress)
     result["skipped"] = network["skipped"]
-    best_distance, best_conn = _best_connection(network, element1, element2, progress)
+    pair = _farthest_pair(network["graph"], ends, progress)
+    if pair is None:
+        result["error"] = _islands_error(ends, network["graph"], CuStack)
+        log.warning("%s", result["error"])
+        return result
 
-    if not best_conn:
-        best_conn = (
-            element1["net_start"].get(element1["layer"][0], NOT_ASSIGNED),
-            element2["net_start"].get(element2["layer"][0], NOT_ASSIGNED),
-            element1["layer"][0],
-            element2["layer"][0],
-        )
-
-    conn1, conn2 = best_conn[0], best_conn[1]
+    conn1, conn2 = (end.nodes[layer] for end, layer in pair)
     result["conn1"], result["conn2"] = conn1, conn2
-    if NOT_ASSIGNED in (conn1, conn2):
-        result["error"] = (
-            "Select pads, vias or tracks as measurement points; "
-            "zones have no single connection point."
-        )
-        return result
-    if conn1 == conn2:
-        result["error"] = (
-            "The selected elements touch each other directly, "
-            "so there is no copper path between them to analyze."
-        )
-        return result
-
-    # Get full path info for best connection
+    result["free_ends"] = len(ends)
+    result["measured"] = [_point_text(end, [layer], CuStack) for end, layer in pair]
     Distance, path, short_path_RES = find_path(network, conn1, conn2)
-
     log.info(
-        "Best path: conn1=%s, conn2=%s, layers=%s/%s, distance=%.3fmm",
+        "Measuring %s to %s (nodes %s/%s, %d free ends), distance=%.3fmm",
+        *result["measured"],
         conn1,
         conn2,
-        best_conn[2],
-        best_conn[3],
-        best_distance * 1000,
+        len(ends),
+        Distance * 1000,
     )
-
-    if math.isinf(Distance):
-        result["error"] = _build_path_error(
-            element1, element2, conn1, conn2, network["graph"], CuStack
-        )
-        log.error("%s", result["error"])
-        return result
 
     result.update(
         {
@@ -232,37 +297,6 @@ def analyze_pcb_parasitic(
     return result
 
 
-def _best_connection(
-    network: dict[str, Any],
-    element1: dict[str, Any],
-    element2: dict[str, Any],
-    progress: Progress,
-) -> tuple[float, tuple[int, int, int, int] | None]:
-    """Shortest path over all layer combinations of the two elements.
-
-    Returns:
-        (distance, (conn1, conn2, layer1, layer2)); (inf, None) if none connects
-    """
-    layer_pairs = [
-        (layer1, layer2)
-        for layer1 in element1.get("layer", [])
-        for layer2 in element2.get("layer", [])
-    ]
-    best_distance = float("inf")
-    best_conn = None
-    for finished, (layer1, layer2) in enumerate(layer_pairs):
-        report(progress, Stage.PATH, finished, len(layer_pairs))
-        conn1 = element1["net_start"].get(layer1, NOT_ASSIGNED)
-        conn2 = element2["net_start"].get(layer2, NOT_ASSIGNED)
-        if NOT_ASSIGNED in (conn1, conn2):
-            continue
-        distance, _, _ = find_path(network, conn1, conn2)
-        if distance < best_distance:
-            best_distance = distance
-            best_conn = (conn1, conn2, layer1, layer2)
-    return best_distance, best_conn
-
-
 def format_result_message(
     result: dict[str, Any],
     CuStack: dict[int, CuLayer],
@@ -298,6 +332,15 @@ def format_result_message(
     Z_ac_conn2 = result.get("impedance_ac_conn2", {})
     Area = result["area"]
 
+    if result["measured"]:
+        point1, point2 = result["measured"]
+        lines += [f"Measured from {point1}", f"           to {point2}"]
+        if result["free_ends"] > 2:
+            lines.append(
+                f"           (farthest apart of {result['free_ends']} free ends "
+                "along the copper)"
+            )
+        lines.append("")
     lines.append(f"Shortest distance ≈ {Distance * 1000:.3f} mm")
 
     if short_path_RES is not None:
